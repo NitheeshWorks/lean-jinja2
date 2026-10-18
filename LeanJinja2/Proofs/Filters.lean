@@ -1,3 +1,4 @@
+import LeanJinja2.Specifications.Semantics
 import LeanJinja2.Proofs.Render
 
 /-!
@@ -103,9 +104,6 @@ namespace LeanJinja2
 
 open LeanMarkupsafe
 
-/-- The characters `tojson` must never emit raw inside a `<script>` tag or
-an HTML document. -/
-def htmlUnsafe (c : Char) : Bool := c == '<' || c == '>' || c == '&' || c == '\''
 
 theorem htmlsafeChar_safe (d : Char) : ∀ c ∈ (htmlsafeChar d).toList, htmlUnsafe c = false := by
   intro c hc
