@@ -5,7 +5,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "ef3f412bd9c0db520eedcbac89fd2fd4e173725c",
+   "rev": "301bffd1704da33f499c61ca6f0b7a0e1534f6ac",
    "name": "LeanMarkupsafe",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
