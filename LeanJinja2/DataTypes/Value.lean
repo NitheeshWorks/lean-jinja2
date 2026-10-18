@@ -41,6 +41,10 @@ inductive UndefInfo where
   | attr (objType : String) (n : String)
   /-- A free-form hint, e.g. `there is no next item`. -/
   | hint (h : String)
+  /-- The value of `a if c` when `c` is false: always upstream's plain
+  `Undefined`, whatever the environment's policy (upstream
+  `cond_expr_undefined = Undefined`). -/
+  | plain (h : String)
   deriving Repr, Inhabited, BEq, DecidableEq
 
 /-- Runtime values. -/

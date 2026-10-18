@@ -61,7 +61,6 @@ from. -/
 structure BlockEntry where
   body : List Node
   autoescape : Bool
-  isScoped : Bool
   required : Bool
   deriving Inhabited
 
@@ -252,7 +251,7 @@ def compareOp (pol : UndefinedPolicy) (heap : Heap) (op : CmpOp) (a b : Value) :
   | .eq | .ne =>
     match a, b with
     | .undef i, _ | _, .undef i =>
-      if pol == .strict then failUndef i
+      if i.policy pol == .strict then failUndef i
       else .ok (if op == .eq then Value.pyEq a b else !Value.pyEq a b)
     | _, _ => .ok (if op == .eq then Value.pyEq a b else !Value.pyEq a b)
   | .in => containsV pol heap a b
@@ -384,7 +383,7 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       if ok then evalE env n fr b
       else match els with
         | some x => evalE env n fr x
-        | none => pure (.undef (.hint
+        | none => pure (.undef (.plain
             "the inline if-expression evaluated to false and no else section was defined."))
 
 /-- Call a value. -/
@@ -436,7 +435,7 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
       let s ← liftR (Piece.flatten pol ps)
       pure (wrapText fr.autoescape s)
     | .superRef b i => do
-      let ps ← renderBlockAt env n fr b i
+      let ps ← renderBlockAt env n fr b i (if i = 0 then [] else fr.locals)
       let s ← liftR (Piece.flatten pol ps)
       pure (wrapText fr.autoescape s)
     | .undef i => liftR (failUndef i)
@@ -576,7 +575,7 @@ def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Pi
           { fr with locals := if sc then fr.locals else [], top := false, curBlock := some (nm, 0) } body
         pure (ps, fr)
       else do
-        let ps ← renderBlockAt env n fr nm 0
+        let ps ← renderBlockAt env n fr nm 0 (if sc then fr.locals else [])
         pure (ps, fr)
     | .with_ assigns body => do
       let binds ← assigns.mapM (fun a => do
@@ -662,16 +661,18 @@ def renderLoop (env : Environment) : Nat → Frame → LoopRec → Bool → List
           rec.body
         pure (acc ++ ps)) []
 
-/-- Render entry `i` of a block chain. -/
-def renderBlockAt (env : Environment) : Nat → Frame → String → Nat → RenderM (List Piece)
-  | 0, _, _, _ => throw .fuelExhausted
-  | n + 1, fr, b, i =>
+/-- Render entry `i` of a block chain with the given locals (the caller's when
+the block tag is `scoped`, and for `super()`). -/
+def renderBlockAt (env : Environment) : Nat → Frame → String → Nat → List (String × Value) →
+    RenderM (List Piece)
+  | 0, _, _, _, _ => throw .fuelExhausted
+  | n + 1, fr, b, i, locals =>
     match (fr.chain b)[i]? with
     | none => throw (.undefined s!"there is no parent block called '{b}'.")
     | some be =>
       if be.required then throw (.runtime s!"Required block '{b}' not found.") else do
       let (ps, _) ← renderNodes env n
-        { fr with locals := if be.isScoped then fr.locals else [], top := false,
+        { fr with locals := locals, top := false,
                   curBlock := some (b, i), autoescape := be.autoescape } be.body
       pure ps
 
@@ -683,7 +684,7 @@ def renderTemplate (env : Environment) : Nat → Frame → Option String → Lis
   | 0, _, _, _ => throw .fuelExhausted
   | n + 1, base, name, body => do
     let ae := env.autoescape.enabledFor name
-    let own := (blockDefs body).map (fun (b, sc, req, bb) => (b, BlockEntry.mk bb ae sc req))
+    let own := (blockDefs body).map (fun (b, _, req, bb) => (b, BlockEntry.mk bb ae req))
     let fr : Frame :=
       { base with own := own, top := true, parent := none, name := name, autoescape := ae, curBlock := none, locals := [] }
     let (ps, fr') ← renderNodes env n fr body

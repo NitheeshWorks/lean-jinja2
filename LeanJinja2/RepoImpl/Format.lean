@@ -157,8 +157,8 @@ def pctFormat (pol : UndefinedPolicy) (esc : Bool) (tmpl : String) (args : Value
         let (o, rest, _) ← go fuel r rest true
         pure (s.toList ++ o, rest, true)
     | fuel + 1, c :: r, rest, used => do
-      let (o, rest, used) ← go fuel r rest used
-      pure (c :: o, rest, used)
+      let (o, rest, used') ← go fuel r rest used
+      pure (c :: o, rest, used')
   let (out, rest, _) ← go (tmpl.length + 1) tmpl.toList positional false
   if mapping.isNone && !rest.isEmpty then
     .error (.typeError "not all arguments converted during string formatting")

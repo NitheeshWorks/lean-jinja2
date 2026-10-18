@@ -216,7 +216,7 @@ def Value.objectTypeRepr : Value → String
 def UndefInfo.message : UndefInfo → String
   | .name n => s!"'{n}' is undefined"
   | .attr o n => s!"'{o}' has no attribute '{n}'"
-  | .hint h => h
+  | .hint h | .plain h => h
 
 /-! ## `str()` and `repr()` -/
 

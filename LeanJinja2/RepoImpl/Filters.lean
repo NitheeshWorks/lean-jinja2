@@ -294,9 +294,9 @@ def applyTest (fc : FCtx) (name : String) (v : Value) (args : List Value)
     match a0 "b" with
     | some b =>
       match v, b with
-      | .undef i, _ => if fc.pol == .strict || !(name == "==" || name == "eq" || name == "equalto" ||
+      | .undef i, _ => if i.policy fc.pol == .strict || !(name == "==" || name == "eq" || name == "equalto" ||
           name == "!=" || name == "ne") then failUndef i else cmpTest name v b
-      | _, .undef i => if fc.pol == .strict then failUndef i else cmpTest name v b
+      | _, .undef i => if i.policy fc.pol == .strict then failUndef i else cmpTest name v b
       | _, _ => cmpTest name v b
     | none => typeErr s!"{name} test requires an argument"
   | _ =>
@@ -458,7 +458,7 @@ def applyFilterD (fc : FCtx) : Nat → String → Value → List Value → List 
     match a 0 "name" with
     | some (.str n) =>
       match v with
-      | .undef i => if pol == .chainable then pure v else failUndef i
+      | .undef i => if i.policy pol == .chainable then pure v else failUndef i
       | _ => pure ((pyAttr fc.heap v n).getD (.undef (.attr v.objectTypeRepr n)))
     | _ => typeErr "attr requires a string name"
   | "batch" => do
@@ -611,7 +611,8 @@ def applyFilterD (fc : FCtx) : Nat → String → Value → List Value → List 
   | "lower" => do let s ← strOf pol v; pure (keepKind v (strLower s))
   | "upper" => do let s ← strOf pol v; pure (keepKind v (strUpper s))
   | "map" => do
-    let xs ← iter v
+    let t0 ← truthyOf pol v
+    let xs ← if t0 then iter v else pure []
     if args.isEmpty && (kwargs.lookup "attribute").isSome then
       let at_ := (kwargs.lookup "attribute").getD .none
       let dflt := kwargs.lookup "default"

@@ -21,22 +21,28 @@ abbrev Heap := List (List (String × Value))
 
 def undefinedError (i : UndefInfo) : RenderError := .undefined i.message
 
+/-- The policy an undefined value follows: the environment's, except for the
+plain undefined of a conditional expression without `else`. -/
+def UndefInfo.policy (pol : UndefinedPolicy) : UndefInfo → UndefinedPolicy
+  | .plain _ => .default
+  | _ => pol
+
 /-- Python `str(v)` under the undefined policy. -/
 def strOf (pol : UndefinedPolicy) : Value → Except RenderError String
   | .undef i =>
-    match pol with
+    match i.policy pol with
     | .strict => .error (undefinedError i)
     | .debug =>
       .ok (match i with
         | .name n => "{{ " ++ n ++ " }}"
         | .attr o n => "{{ no such element: " ++ o ++ "[" ++ pyStrRepr n ++ "] }}"
-        | .hint h => "{{ undefined value printed: " ++ h ++ " }}")
+        | .hint h | .plain h => "{{ undefined value printed: " ++ h ++ " }}")
     | _ => .ok ""
   | v => .ok v.toStr
 
 /-- Python truthiness under the undefined policy. -/
 def truthyOf (pol : UndefinedPolicy) : Value → Except RenderError Bool
-  | .undef i => if pol == .strict then .error (undefinedError i) else .ok false
+  | .undef i => if i.policy pol == .strict then .error (undefinedError i) else .ok false
   | v => .ok v.truthy
 
 /-- The characters of a string, as one-character strings. -/
@@ -49,7 +55,7 @@ def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except RenderError 
   | .dict kvs => .ok (kvs.map Prod.fst)
   | .str s => .ok (charValues s)
   | .markup m => .ok (charValues m.str)
-  | .undef i => if pol == .strict then .error (undefinedError i) else .ok []
+  | .undef i => if i.policy pol == .strict then .error (undefinedError i) else .ok []
   | .ns a => .ok (((heap[a]?).getD []).map (fun p => Value.str p.1))
   | v => .error (.typeError s!"'{v.typeName}' object is not iterable")
 
@@ -61,7 +67,7 @@ def lenOf (pol : UndefinedPolicy) : Value → Except RenderError Nat
   | .str s => .ok s.length
   | .markup m => .ok m.str.length
   | .loop _ len .. => .ok len
-  | .undef i => if pol == .strict then .error (undefinedError i) else .ok 0
+  | .undef i => if i.policy pol == .strict then .error (undefinedError i) else .ok 0
   | v => .error (.typeError s!"object of type '{v.typeName}' has no len()")
 
 /-- Upstream `escape(v)`: markup passes through, anything else is converted
@@ -145,7 +151,7 @@ chainable policy. -/
 def getattrV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (a : String) :
     Except RenderError Value :=
   match v with
-  | .undef i => if pol == .chainable then .ok v else failUndef i
+  | .undef i => if i.policy pol == .chainable then .ok v else failUndef i
   | _ =>
     match pyAttr heap v a with
     | some r => .ok r
@@ -159,7 +165,7 @@ attribute, then undefined. -/
 def getitemV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (k : Value) :
     Except RenderError Value :=
   match v with
-  | .undef i => if pol == .chainable then .ok v else failUndef i
+  | .undef i => if i.policy pol == .chainable then .ok v else failUndef i
   | _ =>
     match pyItem heap v k with
     | some r => .ok r
@@ -212,7 +218,7 @@ def sliceV (pol : UndefinedPolicy) (v : Value) (start stop step : Option Value) 
   | .str s => return .str (String.join ((← pick (charValues s)).map Value.toStr))
   | .markup m =>
     return .markup (Markup.markSafe (String.join ((← pick (charValues m.str)).map Value.toStr)))
-  | .undef i => if pol == .chainable then pure v else failUndef i
+  | .undef i => if i.policy pol == .chainable then pure v else failUndef i
   | _ => .error (.typeError s!"'{v.typeName}' object is not subscriptable")
 
 /-! ## Arithmetic -/
@@ -295,7 +301,7 @@ def containsV (pol : UndefinedPolicy) (heap : Heap) (x container : Value) :
     | none => .error (.typeError s!"'in <string>' requires string as left operand, not {x.typeName}")
   | .list xs | .tuple xs => .ok (xs.any (fun y => Value.pyEq x y))
   | .dict kvs => .ok (kvs.any (fun p => Value.pyEq x p.1))
-  | .undef i => if pol == .strict then failUndef i else .ok false
+  | .undef i => if i.policy pol == .strict then failUndef i else .ok false
   | .ns addr => .ok ((((heap[addr]?).getD []).map Prod.fst).any (fun k => Value.pyEq x (.str k)))
   | v => .error (.typeError s!"argument of type '{v.typeName}' is not iterable")
 
