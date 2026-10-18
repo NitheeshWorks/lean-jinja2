@@ -120,4 +120,31 @@ theorem mergeOverrides_child (own : List (String × BlockEntry)) (b : String) (b
     (h : own = [(b, be)]) : (mergeOverrides [] own).lookup b = some [be] := by
   subst h; simp [mergeOverrides, List.lookup]
 
+/-! ## The loop values the renderer binds -/
+
+theorem loopValues_go (items : List Value) (d : Nat) (r : Option LoopRec) (c : Nat) :
+    ∀ (xs pre : List Value), items = pre ++ xs →
+      loopValues.go d r c items.length pre.getLast? pre.length xs =
+        (xs.zipIdx pre.length).map (fun p => (p.1, loopValue items p.2 d r c))
+  | [], _, _ => by simp [loopValues.go]
+  | x :: xs, pre, h => by
+    have ih := loopValues_go items d r c xs (pre ++ [x]) (by simp [h])
+    simp only [List.getLast?_append, List.getLast?_singleton, Option.some_or, List.length_append,
+      List.length_singleton] at ih
+    simp only [loopValues.go, List.zipIdx_cons, List.map_cons, ih, loopValue, List.cons.injEq, and_true]
+    subst h
+    congr 2
+    · rcases List.eq_nil_or_concat pre with rfl | ⟨p', y, rfl⟩
+      · simp
+      · simp
+    · rw [List.getElem?_append_right (by omega)]
+      cases xs <;> simp
+
+/-- The renderer's loop values are `loopValue`'s, the ones `for_loop_vars`
+describes. -/
+theorem loopValues_eq (items : List Value) (d : Nat) (r : Option LoopRec) (c : Nat) :
+    loopValues items d r c = items.zipIdx.map (fun p => (p.1, loopValue items p.2 d r c)) := by
+  simpa [loopValues] using loopValues_go items d r c items [] rfl
+
+
 end LeanJinja2

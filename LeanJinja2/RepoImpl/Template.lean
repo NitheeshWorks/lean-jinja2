@@ -62,7 +62,7 @@ def Template.renderTrace (t : Template) (vars : List (String × Value) := []) :
 def Template.render (t : Template) (vars : List (String × Value) := []) :
     Except TemplateError String := do
   let ps ← t.renderTrace vars
-  Piece.flatten t.env.undefined ps
+  (Piece.flatten t.env.undefined ps).mapError ValueError.toRenderError
 
 /-! ## Values from Lean values -/
 

@@ -43,9 +43,9 @@ def splitMax (l : List Char) (sep : Option (List Char)) (maxsplit : Int) : List 
 /-- Python `str.format` with `{}`, `{0}` and `{name}` fields (no format
 specs or conversions). -/
 def strFormat (pol : UndefinedPolicy) (esc : Bool) (tmpl : String) (args : List Value)
-    (kwargs : List (String × Value)) : Except RenderError String := do
+    (kwargs : List (String × Value)) : Except ValueError String := do
   let conv := fun (v : Value) => if esc then (do let m ← escapeOf pol v; pure m.str) else strOf pol v
-  let rec go : Nat → List Char → Nat → Except RenderError (List Char)
+  let rec go : Nat → List Char → Nat → Except ValueError (List Char)
     | 0, _, _ => .ok []
     | _ + 1, [], _ => .ok []
     | fuel + 1, '{' :: '{' :: r, k => do let o ← go fuel r k; pure ('{' :: o)
@@ -77,7 +77,7 @@ def strFormat (pol : UndefinedPolicy) (esc : Bool) (tmpl : String) (args : List 
 
 /-- Call a bound method. -/
 def callMethod (fc : FCtx) (recv : Value) (name : String) (args : List Value)
-    (kwargs : List (String × Value)) : Except RenderError Value := do
+    (kwargs : List (String × Value)) : Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let textArg := fun (i : Nat) (n : String) => do

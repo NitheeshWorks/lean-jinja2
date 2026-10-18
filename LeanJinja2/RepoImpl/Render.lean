@@ -2,6 +2,7 @@ import LeanJinja2.DataTypes.Environment
 import LeanJinja2.RepoImpl.Lexer
 import LeanJinja2.RepoImpl.Parser
 import LeanJinja2.RepoImpl.AstWalk
+import LeanJinja2.RepoImpl.Depth
 import LeanJinja2.RepoImpl.Methods
 
 /-!
@@ -46,13 +47,13 @@ inductive Piece where
 /-- The text of one piece: literal text as is, a value escaped when `esc`
 (upstream `escape`, which leaves markup alone) and converted with `str`
 otherwise. -/
-def Piece.text (pol : UndefinedPolicy) : Piece → Except RenderError String
+def Piece.text (pol : UndefinedPolicy) : Piece → Except ValueError String
   | .lit s => .ok s
   | .value v true => do let m ← escapeOf pol v; pure m.str
   | .value v false => strOf pol v
 
 /-- The output a trace stands for. -/
-def Piece.flatten (pol : UndefinedPolicy) (ps : List Piece) : Except RenderError String := do
+def Piece.flatten (pol : UndefinedPolicy) (ps : List Piece) : Except ValueError String := do
   let ss ← ps.mapM (Piece.text pol)
   pure (String.join ss)
 
@@ -99,7 +100,14 @@ def Frame.chain (fr : Frame) (n : String) : List BlockEntry :=
 /-- The renderer's monad: the namespace heap and render errors. -/
 abbrev RenderM := StateT Heap (Except RenderError)
 
-def liftR {α : Type} (x : Except RenderError α) : RenderM α :=
+/-- Run a value operation: its error becomes a render error. -/
+def liftR {α : Type} (x : Except ValueError α) : RenderM α :=
+  match x with
+  | .ok a => pure a
+  | .error e => throw e.toRenderError
+
+/-- Run a loading step (`getSource`, `compile`). -/
+def liftE {α : Type} (x : Except RenderError α) : RenderM α :=
   match x with
   | .ok a => pure a
   | .error e => throw e
@@ -119,7 +127,7 @@ def Environment.fctx (env : Environment) (fr : Frame) (heap : Heap) : FCtx :=
 
 /-- The bindings an assignment target makes (tuple unpacking as Python). -/
 def bindTarget (pol : UndefinedPolicy) (heap : Heap) (t : Target) (v : Value) :
-    Except RenderError (List (String × Value)) :=
+    Except ValueError (List (String × Value)) :=
   match t with
   | .name n => .ok [(n, v)]
   | .nsAttr _ _ => .error (.assertion "namespace attributes can only be assigned with set")
@@ -184,6 +192,12 @@ def firstDuplicate : List String → Option String
   | [] => none
   | x :: xs => if xs.contains x then some x else firstDuplicate xs
 
+/-- The depth budget a body needs: three levels of the renderer's recursion
+per level of nesting (node, node list, loop), plus the template and the
+list it starts with. `render_total` shows it suffices for templates that do
+not recurse. -/
+def renderBudget (body : List Node) : Nat := 3 * nodesDepth body + 2
+
 /-- Lex, parse and check a template source (upstream `Environment.compile`):
 syntax errors carry their line; unknown filters and duplicate blocks are
 `TemplateAssertionError`s. -/
@@ -203,6 +217,9 @@ def Environment.compile (env : Environment) (src : String) : Except RenderError 
           else if k == 0 then p else posOf ts (k - 1) (p + t.raw.length)
       .error (.syntax e.msg (lineOf src (posOf toks idx 0)))
     | .ok body =>
+      -- too deep for the depth budget: upstream's RecursionError, raised here
+      -- before any walk over the tree (see `render_total` for the bound)
+      if env.maxDepth < renderBudget body then .error .fuelExhausted else
       let fc : FCtx := { filters := env.filters, tests := env.tests }
       match (hardFilterTestNames body).find? (fun p => !(if p.1 then fc.hasFilter p.2 else fc.hasTest p.2)) with
       | some (isF, f) => .error (.assertion s!"No {if isF then "filter" else "test"} named '{f}'.")
@@ -221,7 +238,7 @@ def Environment.startContext (env : Environment) (vars : List (String × Value))
 
 /-- The template names an `{% include %}` expression names: one string, or a
 list of candidates. -/
-def includeNames (pol : UndefinedPolicy) (heap : Heap) : Value → Except RenderError (List String)
+def includeNames (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (List String)
   | .str s => .ok [s]
   | .undef i => failUndef i
   | v => do
@@ -233,10 +250,26 @@ def includeNames (pol : UndefinedPolicy) (heap : Heap) : Value → Except Render
 def loopValue (items : List Value) (i depth0 : Nat) (recur : Option LoopRec) (cell : Nat) : Value :=
   .loop i items.length depth0 (if i = 0 then none else items[i - 1]?) items[i + 1]? recur cell
 
+/-- Each item with its `loop` value, in one pass: the same values as
+`loopValue items i ..` for each index (`loopValues_eq`), without indexing
+the list once per iteration. -/
+def loopValues (items : List Value) (depth0 : Nat) (recur : Option LoopRec) (cell : Nat) :
+    List (Value × Value) :=
+  let len := items.length
+  let rec go : Option Value → Nat → List Value → List (Value × Value)
+    | _, _, [] => []
+    | prev, i, x :: xs => (x, .loop i len depth0 prev xs.head? recur cell) :: go (some x) (i + 1) xs
+  go none 0 items
+
 /-! ## Builtin functions -/
 
-/-- `range(stop)`, `range(start, stop[, step])`. -/
-def rangeFn (args : List Value) : Except RenderError Value := do
+/-- The most items a `range` may produce (upstream `jinja2.sandbox.MAX_RANGE`):
+the renderer is sandboxed, so `range` is upstream's `safe_range`. -/
+def maxRange : Nat := 100000
+
+/-- `range(stop)`, `range(start, stop[, step])`, refusing more than
+`maxRange` items (upstream `safe_range`). -/
+def rangeFn (args : List Value) : Except ValueError Value := do
   let is ← args.mapM (fun a => intArg a "range argument")
   let (a, b, c) ← match is with
     | [b] => pure (0, b, 1)
@@ -247,10 +280,13 @@ def rangeFn (args : List Value) : Except RenderError Value := do
   let count : Nat :=
     if c > 0 then (if b > a then ((b - a + c - 1) / c).toNat else 0)
     else (if a > b then ((a - b + (-c) - 1) / (-c)).toNat else 0)
+  if count > maxRange then
+    .error (.overflow s!"Range too big. The sandbox blocks ranges larger than MAX_RANGE ({maxRange}).")
+  else
   pure (.list ((List.range count).map (fun (k : Nat) => .int (a + (k : Int) * c))))
 
 /-- A mapping argument's entries (`dict(m)`, `namespace(m)`). -/
-def mappingEntries (pol : UndefinedPolicy) (heap : Heap) : Value → Except RenderError (List (Value × Value))
+def mappingEntries (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (List (Value × Value))
   | .dict kvs => .ok kvs
   | v => do
     let xs ← iterOf pol heap v
@@ -260,7 +296,7 @@ def mappingEntries (pol : UndefinedPolicy) (heap : Heap) : Value → Except Rend
 
 /-- One comparison of a chain. -/
 def compareOp (pol : UndefinedPolicy) (heap : Heap) (op : CmpOp) (a b : Value) :
-    Except RenderError Bool :=
+    Except ValueError Bool :=
   match op with
   | .eq | .ne =>
     match a, b with
@@ -502,14 +538,17 @@ def callMacro (env : Environment) : Nat → Frame → String → List Param → 
     pure (wrapText fr.autoescape s)
 
 /-- Render a node list, threading the frame. After `{% extends %}` has run at
-top level, further output is discarded. -/
+top level, further output is discarded. Each node's pieces are kept as one
+chunk, newest first, and joined once at the end, so a long list renders in
+linear time. -/
 def renderNodes (env : Environment) : Nat → Frame → List Node → RenderM (List Piece × Frame)
   | 0, _, _ => throw .fuelExhausted
-  | n + 1, fr, nodes =>
-    nodes.foldlM (fun (st : List Piece × Frame) (node : Node) => do
+  | n + 1, fr, nodes => do
+    let (chunks, fr') ← nodes.foldlM (fun (st : List (List Piece) × Frame) (node : Node) => do
       let (acc, fr) := st
       let (ps, fr') ← renderNode env n fr node
-      pure (if fr.top && fr.parent.isSome then acc else acc ++ ps, fr')) ([], fr)
+      pure (if fr.top && fr.parent.isSome then acc else ps :: acc, fr')) ([], fr)
+    pure (chunks.reverse.flatten, fr')
 
 /-- Render one node. -/
 def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Piece × Frame)
@@ -566,7 +605,7 @@ def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Pi
           | [nm] => throw (.notFound nm)
           | _ => throw (.notFound s!"none of the templates given were found: {names}")
       | some (nm, src) => do
-        let body ← liftR (env.compile src)
+        let body ← liftE (env.compile src)
         let base : Frame :=
           { ctx := if withContext then fr.locals ++ fr.ctx else env.startContext [] }
         let ps ← renderTemplate env n base (some nm) body
@@ -653,14 +692,15 @@ def renderLoop (env : Environment) : Nat → Frame → LoopRec → Bool → List
     else
       let cell := (← get).length
       modify (· ++ [[]])
-      (items.zipIdx).foldlM (fun (acc : List Piece) (p : Value × Nat) => do
-        let (x, i) := p
-        let loopV := loopValue items i depth0 (if recursive then some rec else none) cell
+      let chunks ← (loopValues items depth0 (if recursive then some rec else none) cell).foldlM
+          (fun (acc : List (List Piece)) (p : Value × Value) => do
+        let (x, loopV) := p
         let h ← get
         let binds ← liftR (bindTarget pol h rec.target x)
         let (ps, _) ← renderNodes env n { inner with locals := binds ++ ("loop", loopV) :: fr.locals }
           rec.body
-        pure (acc ++ ps)) []
+        pure (ps :: acc)) []
+      pure chunks.reverse.flatten
 
 /-- The items a loop iterates: those its `if` filter keeps, the filter seeing
 each item bound to the loop target. -/
@@ -705,8 +745,8 @@ def renderTemplate (env : Environment) : Nat → Frame → Option String → Lis
     match fr'.parent with
     | none => pure ps
     | some pn => do
-      let src ← liftR (env.getSource pn)
-      let pbody ← liftR (env.compile src)
+      let src ← liftE (env.getSource pn)
+      let pbody ← liftE (env.compile src)
       let pps ← renderTemplate env n
         { base with ctx := fr'.ctx, overrides := mergeOverrides base.overrides own } (some pn) pbody
       pure (ps ++ pps)

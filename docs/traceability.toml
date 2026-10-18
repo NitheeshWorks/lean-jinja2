@@ -179,3 +179,29 @@ id = "deviation.unicode"
 upstream = "docs/templates.rst#filters"
 title = "Case mapping is ASCII/Latin-1; identifiers approximate Python's unicode rule; no \\N{...} escapes"
 status = "deviation"
+
+[[requirement]]
+id = "sandbox.max-range"
+upstream = "tests/test_api.py::TestExtendedAPI::test_sandbox_max_range"
+title = "range refuses more than MAX_RANGE (100000) items with OverflowError"
+status = "implemented"
+realises = ["LeanJinja2.rangeFn", "LeanJinja2.maxRange"]
+test = ["tests/Conformance.lean", "tests/Bench.lean"]
+
+[[requirement]]
+id = "deviation.string-escapes"
+upstream = "tests/test_lexnparse.py::TestLexer::test_string_escapes"
+title = "An unknown escape keeps its backslash before any character (UP-047)"
+status = "deviation"
+realises = ["LeanJinja2.Lex.unescapeStr"]
+test = ["tests/Conformance.lean"]
+note = "Upstream keeps the backslash before an ASCII character ('\\q' renders \\q) but turns '\\é' into the text \\xe9, because it decodes with backslashreplace then unicode-escape. Here '\\é' renders \\é. Recorded as upstream defect UP-047."
+
+[[requirement]]
+id = "filters.title-markup"
+upstream = "tests/test_filters.py::TestFilter::test_title"
+title = "title on markup returns a plain string, escaped again under autoescape (UP-048)"
+status = "implemented"
+realises = ["LeanJinja2.Filters.title"]
+test = ["tests/Conformance.lean"]
+note = "Follows upstream byte for byte, including the double escape recorded as upstream defect UP-048."

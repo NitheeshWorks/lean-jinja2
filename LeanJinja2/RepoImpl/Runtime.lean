@@ -19,7 +19,7 @@ open LeanMarkupsafe
 /-- The namespace heap: the attributes of each `namespace()` object. -/
 abbrev Heap := List (List (String × Value))
 
-def undefinedError (i : UndefInfo) : RenderError := .undefined i.message
+def undefinedError (i : UndefInfo) : ValueError := .undefined i.message
 
 /-- The policy an undefined value follows: the environment's, except for the
 plain undefined of a conditional expression without `else`. -/
@@ -28,7 +28,7 @@ def UndefInfo.policy (pol : UndefinedPolicy) : UndefInfo → UndefinedPolicy
   | _ => pol
 
 /-- Python `str(v)` under the undefined policy. -/
-def strOf (pol : UndefinedPolicy) : Value → Except RenderError String
+def strOf (pol : UndefinedPolicy) : Value → Except ValueError String
   | .undef i =>
     match i.policy pol with
     | .strict => .error (undefinedError i)
@@ -41,7 +41,7 @@ def strOf (pol : UndefinedPolicy) : Value → Except RenderError String
   | v => .ok v.toStr
 
 /-- Python truthiness under the undefined policy. -/
-def truthyOf (pol : UndefinedPolicy) : Value → Except RenderError Bool
+def truthyOf (pol : UndefinedPolicy) : Value → Except ValueError Bool
   | .undef i => if i.policy pol == .strict then .error (undefinedError i) else .ok false
   | v => .ok v.truthy
 
@@ -49,7 +49,7 @@ def truthyOf (pol : UndefinedPolicy) : Value → Except RenderError Bool
 def charValues (s : String) : List Value := s.toList.map (fun c => .str (String.singleton c))
 
 /-- Python `iter(v)` under the undefined policy: the items a `for` loop sees. -/
-def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except RenderError (List Value)
+def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (List Value)
   | .list xs => .ok xs
   | .tuple xs => .ok xs
   | .dict kvs => .ok (kvs.map Prod.fst)
@@ -60,7 +60,7 @@ def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except RenderError 
   | v => .error (.typeError s!"'{v.typeName}' object is not iterable")
 
 /-- Python `len(v)` under the undefined policy. -/
-def lenOf (pol : UndefinedPolicy) : Value → Except RenderError Nat
+def lenOf (pol : UndefinedPolicy) : Value → Except ValueError Nat
   | .list xs => .ok xs.length
   | .tuple xs => .ok xs.length
   | .dict kvs => .ok kvs.length
@@ -72,18 +72,18 @@ def lenOf (pol : UndefinedPolicy) : Value → Except RenderError Nat
 
 /-- Upstream `escape(v)`: markup passes through, anything else is converted
 with `str()` and escaped. -/
-def escapeOf (pol : UndefinedPolicy) : Value → Except RenderError Markup
+def escapeOf (pol : UndefinedPolicy) : Value → Except ValueError Markup
   | .markup m => .ok m
   | v => do let s ← strOf pol v; pure (escape s)
 
 /-- Upstream `soft_str`: markup stays markup, anything else becomes text. -/
-def softOf (pol : UndefinedPolicy) : Value → Except RenderError SoftString
+def softOf (pol : UndefinedPolicy) : Value → Except ValueError SoftString
   | .markup m => .ok (.markup m)
   | v => do let s ← strOf pol v; pure (.plain s)
 
 /-- An operation on an undefined value fails (upstream
 `_fail_with_undefined_error`). -/
-def failUndef {α : Type} (i : UndefInfo) : Except RenderError α := .error (undefinedError i)
+def failUndef {α : Type} (i : UndefInfo) : Except ValueError α := .error (undefinedError i)
 
 /-! ## Attribute and item access -/
 
@@ -149,7 +149,7 @@ def pyItem (heap : Heap) (v : Value) (k : Value) : Option Value :=
 undefined. Attribute access on an undefined value fails, except under the
 chainable policy. -/
 def getattrV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (a : String) :
-    Except RenderError Value :=
+    Except ValueError Value :=
   match v with
   | .undef i => if i.policy pol == .chainable then .ok v else failUndef i
   | _ =>
@@ -163,7 +163,7 @@ def getattrV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (a : String) :
 /-- Upstream `Environment.getitem(obj, key)`: item, then (for a string key)
 attribute, then undefined. -/
 def getitemV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (k : Value) :
-    Except RenderError Value :=
+    Except ValueError Value :=
   match v with
   | .undef i => if i.policy pol == .chainable then .ok v else failUndef i
   | _ =>
@@ -178,7 +178,7 @@ def getitemV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (k : Value) :
       | _ => .ok (.undef (.hint s!"{v.objectTypeRepr} has no element {k.repr}"))
 
 /-- Python slice bounds for a sequence of length `n`. -/
-def sliceIndices (n : Nat) (start stop step : Option Int) : Except RenderError (List Nat) :=
+def sliceIndices (n : Nat) (start stop step : Option Int) : Except ValueError (List Nat) :=
   let st := step.getD 1
   if st == 0 then .error (.typeError "slice step cannot be zero") else
   let n' : Int := n
@@ -196,7 +196,7 @@ def sliceIndices (n : Nat) (start stop step : Option Int) : Except RenderError (
     .ok ((List.range count).map (fun (k : Nat) => (a + (k : Int) * st).toNat))
 
 /-- An optional slice bound as an integer. -/
-def sliceBound : Option Value → Except RenderError (Option Int)
+def sliceBound : Option Value → Except ValueError (Option Int)
   | none => .ok none
   | some .none => .ok none
   | some (.int i) => .ok (some i)
@@ -205,7 +205,7 @@ def sliceBound : Option Value → Except RenderError (Option Int)
 
 /-- Python `v[start:stop:step]`. -/
 def sliceV (pol : UndefinedPolicy) (v : Value) (start stop step : Option Value) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a ← sliceBound start
   let b ← sliceBound stop
   let c ← sliceBound step
@@ -224,9 +224,9 @@ def sliceV (pol : UndefinedPolicy) (v : Value) (start stop step : Option Value) 
 /-! ## Arithmetic -/
 
 /-- The result of a binary arithmetic operator on defined values. -/
-def arith (op : BinOp) (a b : Value) : Except RenderError Value :=
+def arith (op : BinOp) (a b : Value) : Except ValueError Value :=
   let tyErr := fun (sym : String) =>
-    Except.error (RenderError.typeError
+    Except.error (ValueError.typeError
       s!"unsupported operand type(s) for {sym}: '{a.typeName}' and '{b.typeName}'")
   match op with
   | .add =>
@@ -293,7 +293,7 @@ def arith (op : BinOp) (a b : Value) : Except RenderError Value :=
 
 /-- `x in container` (Python `in`). -/
 def containsV (pol : UndefinedPolicy) (heap : Heap) (x container : Value) :
-    Except RenderError Bool :=
+    Except ValueError Bool :=
   match container with
   | .str s | .markup ⟨s⟩ =>
     match x.text? with

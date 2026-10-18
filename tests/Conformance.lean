@@ -67,6 +67,10 @@ def isType : TemplateError → Bool
 def isRuntime : TemplateError → Bool
   | .runtime _ => true
   | _ => false
+def isOverflow : TemplateError → Bool
+  | .overflow m => m == "Range too big. The sandbox blocks ranges larger than MAX_RANGE (100000)."
+  | _ => false
+
 def msgHas (sub : String) : TemplateError → Bool
   | e => ((toString e).splitOn sub).length > 1
 
@@ -786,7 +790,19 @@ def undefinedCases : List Case :=
       { autoescape := selectAutoescape ["html"] [] false, loader := DictLoader [("test.txt", "{{ foo }}"), ("test.html", "{{ foo }}")] }
       "test.html" "&lt;foo&gt;" [("foo", "<foo>")],
     renders "tests/test_api.py::TestExtendedAPI::test_autoescape_autoselect[string]" "{{ foo }}" "<foo>" [("foo", "<foo>")]
-      (env := { autoescape := selectAutoescape ["html"] [] false }) ]
+      (env := { autoescape := selectAutoescape ["html"] [] false }),
+    fails "tests/test_api.py::TestExtendedAPI::test_sandbox_max_range"
+      "{% for item in range(total) %}{{ item }}{% endfor %}" isOverflow [("total", 100001)],
+    renders "tests/test_api.py::TestExtendedAPI::test_sandbox_max_range[at-limit]"
+      "{{ range(total)|length }}" "100000" [("total", 100000)],
+    -- Deviation UP-047: an unknown escape keeps its backslash before any character
+    -- (upstream turns '\é' into the text \xe9 but keeps '\q').
+    renders "tests/test_lexnparse.py::TestLexer::test_string_escapes[UP-047 deviation]"
+      "{{ '\\q' }}|{{ '\\é' }}" "\\q|\\é",
+    -- UP-048, as upstream: `title` returns a plain string, so markup is escaped again.
+    renders "tests/test_filters.py::TestFilter::test_title[UP-048 markup]"
+      "{{ x|title }}|{{ x|capitalize }}" "&lt;B&gt;hi&lt;/b&gt;|<b>hi</b>"
+      [("x", .markup (LeanMarkupsafe.Markup.markSafe "<b>hi</b>"))] (env := { autoescape := .const true }) ]
 
 /-! ## `FileSystemLoader` (tests/test_loader.py::TestFileSystemLoader), over a fixture written here -/
 

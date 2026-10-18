@@ -43,10 +43,10 @@ def Value.asInt? : Value → Option Int
   | .bool b => some (if b then 1 else 0)
   | _ => Option.none
 
-def typeErr {α : Type} (msg : String) : Except RenderError α := .error (.typeError msg)
+def typeErr {α : Type} (msg : String) : Except ValueError α := .error (.typeError msg)
 
 /-- An integer argument, or a `TypeError`. -/
-def intArg (v : Value) (what : String) : Except RenderError Int :=
+def intArg (v : Value) (what : String) : Except ValueError Int :=
   match v.asInt? with
   | some i => .ok i
   | none => typeErr s!"{what} must be an integer, not {v.typeName}"
@@ -66,7 +66,7 @@ def attrParts : Value → List Value
 
 /-- Upstream `make_attrgetter(attribute, default=default)`. -/
 def attrGet (fc : FCtx) (attr : Value) (default : Option Value) (item : Value) :
-    Except RenderError Value :=
+    Except ValueError Value :=
   (attrParts attr).foldlM (fun it part => do
     let r ← getitemV fc.pol fc.heap it part
     match default, r with
@@ -74,16 +74,16 @@ def attrGet (fc : FCtx) (attr : Value) (default : Option Value) (item : Value) :
     | _, _ => pure r) item
 
 /-- A stable insertion sort with a fallible order. -/
-def sortBy {α : Type} (le : α → α → Except RenderError Bool) (xs : List α) :
-    Except RenderError (List α) :=
-  let rec ins (x : α) : List α → Except RenderError (List α)
+def sortBy {α : Type} (le : α → α → Except ValueError Bool) (xs : List α) :
+    Except ValueError (List α) :=
+  let rec ins (x : α) : List α → Except ValueError (List α)
     | [] => .ok [x]
     | y :: ys => do
       if ← le y x then do let r ← ins x ys; pure (y :: r) else pure (x :: y :: ys)
   xs.foldlM (fun acc x => ins x acc) []
 
 /-- `a ≤ b` in Python's order. -/
-def pyLe (a b : Value) : Except RenderError Bool :=
+def pyLe (a b : Value) : Except ValueError Bool :=
   match Value.pyCmp a b with
   | .ok o => .ok (o != .gt)
   | .error m => typeErr m
@@ -207,13 +207,13 @@ def FCtx.hasTest (fc : FCtx) (n : String) : Bool :=
   builtinTests.contains n || (fc.tests.lookup n).isSome
 
 /-- A native function's error is a `TypeError`. -/
-def liftNative (r : Except String Value) : Except RenderError Value :=
+def liftNative (r : Except String Value) : Except ValueError Value :=
   match r with
   | .ok v => .ok v
   | .error m => .error (.typeError m)
 
 /-- Comparison tests. -/
-def cmpTest (op : String) (a b : Value) : Except RenderError Bool :=
+def cmpTest (op : String) (a b : Value) : Except ValueError Bool :=
   match op with
   | "==" | "eq" | "equalto" => .ok (Value.pyEq a b)
   | "!=" | "ne" => .ok (!Value.pyEq a b)
@@ -235,9 +235,9 @@ def Value.isCallable : Value → Bool
 
 /-- Apply a test (upstream `Environment.call_test`). -/
 def applyTest (fc : FCtx) (name : String) (v : Value) (args : List Value)
-    (kwargs : List (String × Value)) : Except RenderError Bool := do
+    (kwargs : List (String × Value)) : Except ValueError Bool := do
   let a0 := argAt args kwargs 0
-  let undefOp := fun (k : Except RenderError Bool) =>
+  let undefOp := fun (k : Except ValueError Bool) =>
     match v with
     | .undef i => failUndef i
     | _ => k
@@ -309,7 +309,7 @@ def applyTest (fc : FCtx) (name : String) (v : Value) (args : List Value)
     | none => .error (.runtime s!"No test named '{name}'.")
 
 /-- Upstream `do_join` (`d`, `attribute`). -/
-def joinFilter (fc : FCtx) (items : List Value) (d : Value) : Except RenderError Value := do
+def joinFilter (fc : FCtx) (items : List Value) (d : Value) : Except ValueError Value := do
   if !fc.autoescape then
     let ss ← items.mapM (strOf fc.pol)
     let sep ← strOf fc.pol d
@@ -380,7 +380,7 @@ def fileSizeFormat (x : Int × Nat) (binary : Bool) : String :=
     go prefixes 0
 
 /-- Upstream `do_round`. -/
-def roundFilter (x : Int × Nat) (precision : Int) (method : String) : Except RenderError Value :=
+def roundFilter (x : Int × Nat) (precision : Int) (method : String) : Except ValueError Value :=
   if precision < 0 then
     -- round x / 10^k to an integer, then scale back
     let k := precision.natAbs
@@ -392,7 +392,7 @@ def roundFilter (x : Int × Nat) (precision : Int) (method : String) : Except Re
     | .ok d => .ok (mkFloat d)
     | .error e => .error e
 where
-  roundFilterAux (x : Int × Nat) (p : Nat) (method : String) : Except RenderError (Int × Nat) :=
+  roundFilterAux (x : Int × Nat) (p : Nat) (method : String) : Except ValueError (Int × Nat) :=
   match method with
   | "common" => .ok (roundHalfEven x.1 x.2 p, p)
   | "floor" =>
@@ -404,7 +404,7 @@ where
   | _ => .error (.runtime "method must be common, ceil or floor")
 
 /-- Upstream `do_xmlattr`. -/
-def xmlAttr (fc : FCtx) (kvs : List (Value × Value)) (autospace : Bool) : Except RenderError Value := do
+def xmlAttr (fc : FCtx) (kvs : List (Value × Value)) (autospace : Bool) : Except ValueError Value := do
   let items ← kvs.filterMapM fun (k, v) => do
     match v with
     | .none | .undef _ => pure none
@@ -438,11 +438,11 @@ def wordWrap (s : String) (width : Nat) (breakLong : Bool) (wrap : String) : Str
   wrap.intercalate ((splitLines s.toList).map (fun l => wrap.intercalate (wrapLine l)))
 
 /-- A filter implementation: environment context, value, arguments. -/
-abbrev FilterFn := FCtx → Value → List Value → List (String × Value) → Except RenderError Value
+abbrev FilterFn := FCtx → Value → List Value → List (String × Value) → Except ValueError Value
 
 /-- Upstream filter `abs`. -/
 def Filters.abs (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   match v with
   | .int i => pure (.int i.natAbs)
   | .float m s => pure (.float m.natAbs s)
@@ -452,7 +452,7 @@ def Filters.abs (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Stri
 
 /-- Upstream filter `attr`. -/
 def Filters.attr (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   match a 0 "name" with
@@ -464,7 +464,7 @@ def Filters.attr (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
 
 /-- Upstream filter `batch`. -/
 def Filters.batch (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -488,13 +488,13 @@ def Filters.batch (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
 
 /-- Upstream filter `capitalize`. -/
 def Filters.capitalize (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do let s ← strOf pol v; pure (keepKind v (strCapitalize s))
 
 /-- Upstream filter `center`. -/
 def Filters.center (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   do
@@ -509,13 +509,13 @@ def Filters.center (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
 
 /-- Upstream filter `count`, `length`. -/
 def Filters.length (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do let n ← lenOf pol v; pure (.int n)
 
 /-- Upstream filter `d`, `default`. -/
 def Filters.default (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   do
@@ -529,7 +529,7 @@ def Filters.default (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
 
 /-- Upstream filter `dictsort`. -/
 def Filters.dictsort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   do
   let cs := ((a 0 "case_sensitive").map Value.truthy).getD false
@@ -549,13 +549,13 @@ def Filters.dictsort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List 
 
 /-- Upstream filter `e`, `escape`. -/
 def Filters.e (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do let m ← escapeOf pol v; pure (.markup m)
 
 /-- Upstream filter `filesizeformat`. -/
 def Filters.filesizeformat (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let binary := ((a 0 "binary").map Value.truthy).getD false
   match v.num?, v with
@@ -568,7 +568,7 @@ def Filters.filesizeformat (fc : FCtx) (v : Value) (args : List Value) (kwargs :
 
 /-- Upstream filter `first`. -/
 def Filters.first (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let iter := fun (x : Value) => iterOf pol fc.heap x
   do
@@ -577,7 +577,7 @@ def Filters.first (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
 
 /-- Upstream filter `float`. -/
 def Filters.float (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let dflt := (a 0 "default").getD (.float 0 0)
   match v with
@@ -589,7 +589,7 @@ def Filters.float (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
 
 /-- Upstream filter `forceescape`. -/
 def Filters.forceescape (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   match v with
   | .markup m => pure (.markup (escape m.str))
@@ -597,7 +597,7 @@ def Filters.forceescape (fc : FCtx) (v : Value) (args : List Value) (kwargs : Li
 
 /-- Upstream filter `format`. -/
 def Filters.format (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do
   if !args.isEmpty && !kwargs.isEmpty then
@@ -611,7 +611,7 @@ def Filters.format (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
 
 /-- Upstream filter `groupby`. -/
 def Filters.groupby (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -626,7 +626,7 @@ def Filters.groupby (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
     let k ← attrGet fc attr dflt x
     pure ((if cs then k else ignoreCase k), x))
   let sorted ← sortBy (fun p q => pyLe p.1 q.1) keyed
-  let rec groups : Nat → List (Value × Value) → Except RenderError (List Value)
+  let rec groups : Nat → List (Value × Value) → Except ValueError (List Value)
     | 0, _ => pure []
     | _ + 1, [] => pure []
     | fuel + 1, (k, x) :: rest =>
@@ -641,7 +641,7 @@ def Filters.groupby (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
 
 /-- Upstream filter `indent`. -/
 def Filters.indent (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   do
@@ -656,7 +656,7 @@ def Filters.indent (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
 
 /-- Upstream filter `int`. -/
 def Filters.int (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   do
   let dflt := (a 0 "default").getD (.int 0)
@@ -676,7 +676,7 @@ def Filters.int (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Stri
 
 /-- Upstream filter `items`. -/
 def Filters.items (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   match v with
   | .undef _ => pure (.list [])
@@ -685,7 +685,7 @@ def Filters.items (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
 
 /-- Upstream filter `join`. -/
 def Filters.join (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -698,7 +698,7 @@ def Filters.join (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
 
 /-- Upstream filter `last`. -/
 def Filters.last (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let iter := fun (x : Value) => iterOf pol fc.heap x
   do
@@ -707,26 +707,26 @@ def Filters.last (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
 
 /-- Upstream filter `list`. -/
 def Filters.list (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let iter := fun (x : Value) => iterOf pol fc.heap x
   do let xs ← iter v; pure (.list xs)
 
 /-- Upstream filter `lower`. -/
 def Filters.lower (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do let s ← strOf pol v; pure (keepKind v (strLower s))
 
 /-- Upstream filter `upper`. -/
 def Filters.upper (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do let s ← strOf pol v; pure (keepKind v (strUpper s))
 
 /-- Upstream filter `map`. -/
-def Filters.map (apply : String → Value → List Value → List (String × Value) → Except RenderError Value) (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+def Filters.map (apply : String → Value → List Value → List (String × Value) → Except ValueError Value) (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -748,7 +748,7 @@ def Filters.map (apply : String → Value → List Value → List (String × Val
 
 /-- Upstream filter `min`, `max`. -/
 def Filters.min (isMin : Bool) (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -772,12 +772,12 @@ def Filters.min (isMin : Bool) (fc : FCtx) (v : Value) (args : List Value) (kwar
 
 /-- Upstream filter `pprint`. -/
 def Filters.pprint (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   pure (.str v.repr)
 
 /-- Upstream filter `select`, `reject`, `selectattr`, `rejectattr`. -/
 def Filters.select (lookupAttr keep : Bool) (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let iter := fun (x : Value) => iterOf pol fc.heap x
   do
@@ -798,7 +798,7 @@ def Filters.select (lookupAttr keep : Bool) (fc : FCtx) (v : Value) (args : List
 
 /-- Upstream filter `replace`. -/
 def Filters.replace (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   do
@@ -828,7 +828,7 @@ def Filters.replace (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
 
 /-- Upstream filter `reverse`. -/
 def Filters.reverse (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let iter := fun (x : Value) => iterOf pol fc.heap x
   match v with
@@ -838,7 +838,7 @@ def Filters.reverse (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
 
 /-- Upstream filter `round`. -/
 def Filters.round (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   do
   let p ← intArg ((a 0 "precision").getD (.int 0)) "precision"
@@ -853,7 +853,7 @@ def Filters.round (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
 
 /-- Upstream filter `safe`. -/
 def Filters.safe (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   match v with
   | .markup _ => pure v
@@ -861,7 +861,7 @@ def Filters.safe (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
 
 /-- Upstream filter `slice`. -/
 def Filters.slice (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -891,7 +891,7 @@ def Filters.slice (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
 
 /-- Upstream filter `sort`. -/
 def Filters.sort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -912,7 +912,7 @@ def Filters.sort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
 
 /-- Upstream filter `string`. -/
 def Filters.string (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   match v with
   | .markup _ => pure v
@@ -920,7 +920,7 @@ def Filters.string (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
 
 /-- Upstream filter `striptags`. -/
 def Filters.striptags (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   match v with
   | .markup m => pure (.str m.striptags)
@@ -928,7 +928,7 @@ def Filters.striptags (fc : FCtx) (v : Value) (args : List Value) (kwargs : List
 
 /-- Upstream filter `sum`. -/
 def Filters.sum (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -945,13 +945,13 @@ def Filters.sum (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Stri
 
 /-- Upstream filter `title`. -/
 def Filters.title (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do let s ← strOf pol v; pure (.str (String.ofList (titleList s.toList)))
 
 /-- Upstream filter `tojson`. -/
 def Filters.tojson (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   do
   let ind ← match a 0 "indent" with
@@ -962,7 +962,7 @@ def Filters.tojson (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
 
 /-- Upstream filter `trim`. -/
 def Filters.trim (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   do
@@ -974,7 +974,7 @@ def Filters.trim (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
 
 /-- Upstream filter `truncate`. -/
 def Filters.truncate (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   do
@@ -998,7 +998,7 @@ def Filters.truncate (fc : FCtx) (v : Value) (args : List Value) (kwargs : List 
 
 /-- Upstream filter `unique`. -/
 def Filters.unique (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   let a := argAt args kwargs
   let iter := fun (x : Value) => iterOf pol fc.heap x
@@ -1014,7 +1014,7 @@ def Filters.unique (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
 
 /-- Upstream filter `urlencode`. -/
 def Filters.urlencode (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   match v with
   | .dict kvs => do
@@ -1036,13 +1036,13 @@ def Filters.urlencode (fc : FCtx) (v : Value) (args : List Value) (kwargs : List
 
 /-- Upstream filter `wordcount`. -/
 def Filters.wordcount (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let pol := fc.pol
   do let s ← strOf pol v; pure (.int (wordCount s.toList))
 
 /-- Upstream filter `wordwrap`. -/
 def Filters.wordwrap (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let pol := fc.pol
   do
@@ -1056,7 +1056,7 @@ def Filters.wordwrap (fc : FCtx) (v : Value) (args : List Value) (kwargs : List 
 
 /-- Upstream filter `xmlattr`. -/
 def Filters.xmlattr (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
-    Except RenderError Value := do
+    Except ValueError Value := do
   let a := argAt args kwargs
   let autospace := ((a 0 "autospace").map Value.truthy).getD true
   match v with
@@ -1066,7 +1066,7 @@ def Filters.xmlattr (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
 /-- The builtin filters by name (upstream `FILTERS`); `apply` is the filter
 lookup `map` calls by name. -/
 def builtinFilterTable (apply : String → Value → List Value → List (String × Value) →
-    Except RenderError Value) : List (String × FilterFn) := [
+    Except ValueError Value) : List (String × FilterFn) := [
   ("abs", Filters.abs),
   ("attr", Filters.attr),
   ("batch", Filters.batch),
@@ -1121,10 +1121,12 @@ def builtinFilterTable (apply : String → Value → List Value → List (String
   ("xmlattr", Filters.xmlattr)]
 
 /-- Apply a filter (upstream `Environment.call_filter`). `depth` bounds the
-nesting of `map` calling filters by name. -/
+nesting of `map` calling filters by name. Each level of that nesting consumes
+one argument, so the `args.length + 2` that `applyFilter` gives is never
+exhausted. -/
 def applyFilterD (fc : FCtx) : Nat → String → Value → List Value → List (String × Value) →
-    Except RenderError Value
-  | 0, _, _, _, _ => .error .fuelExhausted
+    Except ValueError Value
+  | 0, _, _, _, _ => .error (.runtime "filter nesting exceeds its arguments")
   | d + 1, name, v, args, kwargs =>
     match (builtinFilterTable (applyFilterD fc d)).lookup name with
     | some f => f fc v args kwargs
@@ -1135,7 +1137,7 @@ def applyFilterD (fc : FCtx) : Nat → String → Value → List Value → List 
 
 /-- Apply a filter by name. -/
 def applyFilter (fc : FCtx) (name : String) (v : Value) (args : List Value)
-    (kwargs : List (String × Value)) : Except RenderError Value :=
+    (kwargs : List (String × Value)) : Except ValueError Value :=
   applyFilterD fc (args.length + 2) name v args kwargs
 
 end LeanJinja2

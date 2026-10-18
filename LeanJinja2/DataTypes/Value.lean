@@ -109,12 +109,31 @@ inductive AutoescapePolicy where
 def AutoescapePolicy.selectDefault : AutoescapePolicy :=
   .select ["html", "htm", "xml"] [] true false
 
+/-- Errors the value operations raise: filters, tests, methods, attribute and
+item access, arithmetic. There is no constructor for running out of the depth
+budget, because these operations take none, so a `RecursionError` can only
+come from the renderer's own recursion (see `render_total`). -/
+inductive ValueError where
+  /-- `UndefinedError`. -/
+  | undefined (msg : String)
+  /-- `TypeError`/`ValueError`/`ZeroDivisionError`... raised by an operation. -/
+  | typeError (msg : String)
+  /-- `OverflowError` (the sandbox's `MAX_RANGE`). -/
+  | overflow (msg : String)
+  /-- `TemplateAssertionError`. -/
+  | assertion (msg : String)
+  /-- `TemplateRuntimeError`, `FilterArgumentError`. -/
+  | runtime (msg : String)
+  deriving DecidableEq, Repr, Inhabited, BEq
+
 /-- Errors raised while rendering (upstream exception classes). -/
 inductive RenderError where
   /-- `UndefinedError`. -/
   | undefined (msg : String)
   /-- `TypeError`/`ValueError`/`ZeroDivisionError`... raised by an operation. -/
   | typeError (msg : String)
+  /-- `OverflowError` (the sandbox's `MAX_RANGE`). -/
+  | overflow (msg : String)
   /-- `TemplateNotFound`. -/
   | notFound (name : String)
   /-- `TemplateSyntaxError`, from a template loaded during rendering. -/
@@ -131,10 +150,23 @@ instance : ToString RenderError where
   toString
     | .undefined m => s!"UndefinedError: {m}"
     | .typeError m => s!"TypeError: {m}"
+    | .overflow m => s!"OverflowError: {m}"
     | .notFound n => s!"TemplateNotFound: {n}"
     | .syntax m l => s!"TemplateSyntaxError: {m} (line {l})"
     | .assertion m => s!"TemplateAssertionError: {m}"
     | .runtime m => s!"TemplateRuntimeError: {m}"
     | .fuelExhausted => "RecursionError: maximum recursion depth exceeded"
+
+/-- A value error as a render error (same exception class). -/
+def ValueError.toRenderError : ValueError → RenderError
+  | .undefined m => .undefined m
+  | .typeError m => .typeError m
+  | .overflow m => .overflow m
+  | .assertion m => .assertion m
+  | .runtime m => .runtime m
+
+instance : Coe ValueError RenderError := ⟨ValueError.toRenderError⟩
+
+instance : ToString ValueError := ⟨fun e => toString e.toRenderError⟩
 
 end LeanJinja2

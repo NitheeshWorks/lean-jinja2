@@ -214,12 +214,20 @@ def Inv (env : Environment) (L : String → Prop) (ae : Bool) (n : Nat) : Prop :
   (∀ base name body s ps s', (∀ p ∈ base.overrides, ∀ be ∈ p.2, EntryOK L ae be) → BodyOK L ae body →
      renderTemplate env n base name body s = .ok (ps, s') → TraceOK L ae ps)
 
+theorem TraceOK.chunks {L ae} {cs : List (List Piece)} (h : ∀ c ∈ cs, TraceOK L ae c) :
+    TraceOK L ae cs.reverse.flatten := by
+  intro p hp
+  simp only [List.mem_flatten, List.mem_reverse] at hp
+  obtain ⟨c, hc, hpc⟩ := hp
+  exact h c hc p hpc
+
 theorem inv_nodes_step {env L ae n} (ih : Inv env L ae n) :
     ∀ fr body s r s', FrameOK L ae fr → BodyOK L ae body →
      renderNodes env (n + 1) fr body s = .ok (r, s') → TraceOK L ae r.1 ∧ Same fr r.2 := by
   intro fr body s r s' hf hb h
-  simp only [renderNodes] at h
-  exact foldlM_inv (fun (st : List Piece × Frame) => TraceOK L ae st.1 ∧ Same fr st.2) _ body
+  simp only [renderNodes, StateT.run_bind_ok, StateT.run_pure_ok] at h
+  obtain ⟨⟨cs, f1⟩, s1, hfold, rfl, -⟩ := h
+  have := foldlM_inv (fun (st : List (List Piece) × Frame) => (∀ c ∈ st.1, TraceOK L ae c) ∧ Same fr st.2) _ body
     (fun ⟨acc, f⟩ node s ⟨acc', f'⟩ s' hn ⟨ht, hs⟩ hstep => by
       simp only [StateT.run_bind_ok, StateT.run_pure_ok] at hstep
       obtain ⟨⟨ps, f2⟩, s2, h1, h2⟩ := hstep
@@ -229,8 +237,12 @@ theorem inv_nodes_step {env L ae n} (ih : Inv env L ae n) :
       refine ⟨?_, hs.trans hs2⟩
       split
       · exact ht
-      · exact ht.append hp)
-    ([], fr) s r s' ⟨TraceOK.nil, Same.refl fr⟩ h
+      · intro c hc
+        rcases List.mem_cons.mp hc with rfl | hc
+        · exact hp
+        · exact ht c hc)
+    ([], fr) s (cs, f1) s1 ⟨(fun _ h => by cases h), Same.refl fr⟩ hfold
+  exact ⟨TraceOK.chunks this.1, this.2⟩
 
 theorem inv_node_step {env L ae n} (hE : EnvOK env L ae) (ih : Inv env L ae n) :
     ∀ fr node s r s', FrameOK L ae fr → BodyOK L ae [node] →
@@ -296,7 +308,7 @@ theorem inv_node_step {env L ae n} (hE : EnvOK env L ae) (ih : Inv env L ae n) :
       · split at h <;> simp at h
     | some p =>
       obtain ⟨nm, src⟩ := p
-      simp only [hfs, StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok] at h
+      simp only [hfs, StateT.run_bind_ok, StateT.run_pure_ok, liftE_ok] at h
       obtain ⟨body, _, ⟨hc, rfl⟩, ps, _, ht, rfl, -⟩ := h
       exact ⟨ih.2.2.2.2 _ _ body _ ps _ (by simp) (hE.1 nm src body (findSome_source hfs) hc) ht,
         Same.refl fr⟩
@@ -356,12 +368,15 @@ theorem inv_loop_step {env L ae n} (ih : Inv env L ae n) :
     exact (ih.1 _ _ _ _ _ hin he hr).1
   · simp only [StateT.run_bind_ok, modify, modifyGet, MonadStateOf.modifyGet, StateT.modifyGet,
       StateT.run_pure_ok] at h
-    obtain ⟨_, _, -, _, _, -, h⟩ := h
-    refine foldlM_inv (TraceOK L ae) _ _ (fun acc p s acc' s' _ hacc hstep => ?_) [] _ ps s' TraceOK.nil h
+    obtain ⟨_, _, -, _, _, -, cs, s2, h, rfl, -⟩ := h
+    refine TraceOK.chunks (foldlM_inv (fun cs => ∀ c ∈ cs, TraceOK L ae c) _ _
+      (fun acc p s acc' s' _ hacc hstep => ?_) [] _ cs s2 (fun _ h => by cases h) h)
     simp only [StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok] at hstep
     obtain ⟨_, _, -, binds, _, -, ⟨ps2, f2⟩, _, hr, rfl, -⟩ := hstep
-    refine hacc.append (ih.1 _ _ _ _ _ ?_ hb hr).1
-    exact ⟨hf.1, hf.2.1, hf.2.2⟩
+    intro c hc
+    rcases List.mem_cons.mp hc with rfl | hc
+    · exact (ih.1 _ _ _ _ _ (by exact ⟨hf.1, hf.2.1, hf.2.2⟩) hb hr).1
+    · exact hacc c hc
 
 theorem inv_block_step {env L ae n} (ih : Inv env L ae n) :
     ∀ fr b i locals s ps s', FrameOK L ae fr →
@@ -404,7 +419,7 @@ theorem inv_tmpl_step {env L ae n} (hE : EnvOK env L ae) (ih : Inv env L ae n) :
     obtain ⟨rfl, -⟩ := h
     exact hfr.1
   | some pn =>
-    simp only [hp, StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok] at h
+    simp only [hp, StateT.run_bind_ok, StateT.run_pure_ok, liftE_ok] at h
     obtain ⟨src, _, ⟨hsrc, rfl⟩, pbody, _, ⟨hc, rfl⟩, pps, _, ht, rfl, -⟩ := h
     refine hfr.1.append (ih.2.2.2.2 _ _ pbody _ pps _ ?_ (hE.1 pn src pbody hsrc hc) ht)
     intro p hp' be hbe
@@ -528,7 +543,7 @@ theorem autoescape_sound (t : Template) (vars : List (String × Value)) (out : S
     split at h
     · cases h
     · rename_i ts hts
-      simp [pure, Except.pure] at h
+      simp [pure, Except.pure, Except.mapError] at h
       rw [← h, mapM_text_escaped ps ts (fun p hp v esc he => by
         have := hinv p hp; subst he; exact this rfl) hts]
 

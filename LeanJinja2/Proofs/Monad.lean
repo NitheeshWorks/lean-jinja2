@@ -28,9 +28,14 @@ theorem StateT.run_pure_ok {σ ε α : Type} {a b : α} {s s' : σ} :
     (pure a : StateT σ (Except ε) α) s = .ok (b, s') ↔ a = b ∧ s = s' := by
   simp [pure, StateT.pure, Except.pure]
 
-theorem liftR_ok {α : Type} {x : Except RenderError α} {s s' : Heap} {a : α} :
+theorem liftR_ok {α : Type} {x : Except ValueError α} {s s' : Heap} {a : α} :
     liftR x s = .ok (a, s') ↔ x = .ok a ∧ s = s' := by
   cases x <;> simp [liftR, pure, StateT.pure, Except.pure, throw, throwThe, MonadExceptOf.throw,
+    StateT.lift, Except.bind, bind]
+
+theorem liftE_ok {α : Type} {x : Except RenderError α} {s s' : Heap} {a : α} :
+    liftE x s = .ok (a, s') ↔ x = .ok a ∧ s = s' := by
+  cases x <;> simp [liftE, pure, StateT.pure, Except.pure, throw, throwThe, MonadExceptOf.throw,
     StateT.lift, Except.bind, bind]
 
 /-- A monadic left fold over a list preserves an invariant that every step

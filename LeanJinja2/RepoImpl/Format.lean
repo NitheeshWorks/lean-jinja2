@@ -81,7 +81,7 @@ def pctPad (sp : PctSpec) (body : String) (numeric : Bool) : String :=
       else String.ofList (List.replicate pad ' ') ++ body
 
 /-- Render one argument under a spec. -/
-def pctOne (pol : UndefinedPolicy) (sp : PctSpec) (v : Value) : Except RenderError String := do
+def pctOne (pol : UndefinedPolicy) (sp : PctSpec) (v : Value) : Except ValueError String := do
   let sgn := fun (neg : Bool) => if neg then "-" else if sp.flags.contains '+' then "+"
     else if sp.flags.contains ' ' then " " else ""
   match sp.conv with
@@ -119,7 +119,7 @@ def pctOne (pol : UndefinedPolicy) (sp : PctSpec) (v : Value) : Except RenderErr
 mapping for `%(key)s`, or a single value. `esc` escapes every interpolated
 non-markup value (the `Markup.__mod__` case). -/
 def pctFormat (pol : UndefinedPolicy) (esc : Bool) (tmpl : String) (args : Value) :
-    Except RenderError String := do
+    Except ValueError String := do
   let positional : List Value := match args with
     | .tuple xs => xs
     | v => [v]
@@ -131,7 +131,7 @@ def pctFormat (pol : UndefinedPolicy) (esc : Bool) (tmpl : String) (args : Value
       | .markup m => pctOne pol sp (.str m.str)
       | _ => do let s ← pctOne pol sp v; pure (escape s).str
     else pctOne pol sp v
-  let rec go : Nat → List Char → List Value → Bool → Except RenderError (List Char × List Value × Bool)
+  let rec go : Nat → List Char → List Value → Bool → Except ValueError (List Char × List Value × Bool)
     | 0, _, rest, used => .ok ([], rest, used)
     | _ + 1, [], rest, used => .ok ([], rest, used)
     | fuel + 1, '%' :: '%' :: r, rest, used => do
@@ -187,7 +187,7 @@ def jsonStr (s : String) : String :=
   "\"" ++ String.join (s.toList.map esc) ++ "\""
 
 /-- A JSON object key (`json.dumps` converts scalar keys to strings). -/
-def jsonKey : Value → Except RenderError String
+def jsonKey : Value → Except ValueError String
   | .str s => .ok s
   | .markup m => .ok m.str
   | .int i => .ok (String.ofList (intDigits i))
@@ -202,7 +202,7 @@ def insertSorted (p : String × String) : List (String × String) → List (Stri
   | q :: qs => if p.1 < q.1 then p :: q :: qs else q :: insertSorted p qs
 
 /-- `json.dumps(v, sort_keys=True, indent=indent)`. -/
-def jsonDump (indent : Option Nat) (level : Nat) : Value → Except RenderError String
+def jsonDump (indent : Option Nat) (level : Nat) : Value → Except ValueError String
   | .none => .ok "null"
   | .bool b => .ok (if b then "true" else "false")
   | .int i => .ok (String.ofList (intDigits i))
@@ -225,14 +225,14 @@ where
     | some k =>
       let pad := fun (n : Nat) => String.ofList (List.replicate (k * n) ' ')
       o ++ "\n" ++ (",\n".intercalate (items.map (pad (level + 1) ++ ·))) ++ "\n" ++ pad level ++ c
-  jsonDumpList (indent : Option Nat) (level : Nat) : List Value → Except RenderError (List String)
+  jsonDumpList (indent : Option Nat) (level : Nat) : List Value → Except ValueError (List String)
     | [] => .ok []
     | x :: xs => do
       let a ← jsonDump indent level x
       let b ← jsonDumpList indent level xs
       pure (a :: b)
   jsonDumpPairs (indent : Option Nat) (level : Nat) :
-      List (Value × Value) → Except RenderError (List (String × String))
+      List (Value × Value) → Except ValueError (List (String × String))
     | [] => .ok []
     | (k, v) :: rest => do
       let ks ← jsonKey k
