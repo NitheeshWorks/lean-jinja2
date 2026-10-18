@@ -53,10 +53,10 @@ theorem stream_run : ∀ {ks : List TokKind}, Stream ks → ∀ ls, ∃ ts m, Ru
       (by simpa [Pretty.render, Pretty.tokText] using hl), ?_⟩
     simp [significant, TokKind.ignored, String.ofList_toList]
   | _, .tag pre blk ks rest hpre hin hbal hhead hrest, ls => by
-    obtain ⟨ts3, m3, hrun3, hsig3⟩ := stream_run hrest false
+    obtain ⟨ts3, m3, hrun3, hsig3⟩ := stream_run hrest .text
     have hcl : NoLead (closeChars blk ++ Pretty.render rest) := by
       intro c hc; cases blk <;> simp [closeChars] at hc <;> subst hc <;> decide
-    obtain ⟨ts2, hrun2, hsig2⟩ := inner_run ks [] [] hin hbal (tagKind blk) _ hcl
+    obtain ⟨ts2, hrun2, hsig2⟩ := inner_run ks [] [] hin hbal (tagKind blk) (by cases blk <;> simp [tagKind]) _ hcl
     have hX : NoLead (Pretty.render ks ++ (closeChars blk ++ Pretty.render rest)) := by
       cases ks with
       | nil => simpa [Pretty.render] using hcl
@@ -85,7 +85,8 @@ theorem stream_run : ∀ {ks : List TokKind}, Stream ks → ∀ ls, ∃ ts m, Ru
     have hws : ∀ pos, Lex.step dcfg (.tag (tagKind blk) [] false)
         (' ' :: (Pretty.render ks ++ (closeChars blk ++ Pretty.render rest))) pos =
         .ok ([⟨.ws, [' ']⟩], .tag (tagKind blk) [] false, Pretty.render ks ++ (closeChars blk ++ Pretty.render rest)) :=
-      fun pos => by simpa [Lex.step] using ws_step (tagKind blk) [] false hX pos
+      fun pos => step_tag (ws_step (tagKind blk) (by cases blk <;> simp [tagKind]) [] false hX pos)
+        (Or.inr (by cases blk <;> rfl))
     have h4 := close_step blk (Pretty.render rest)
     have hren : Pretty.render (preTok pre ++ openKind blk :: (ks ++ closeKind blk :: rest)) =
         p ++ '{' :: openChar blk :: ' ' :: (Pretty.render ks ++ (closeChars blk ++ Pretty.render rest)) := by

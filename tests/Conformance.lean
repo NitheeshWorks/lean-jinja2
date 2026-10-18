@@ -935,8 +935,83 @@ def macroCases : List Case := [
       ("u", "{% import 't' as t %}{{ t.link_detail('circle', 'Index', '/') }}")] }
     "u" "<p><span class=\"fa fa-fw fa-circle\"></span><a href=\"/\">Index</a></p>" ]
 
+/-! ## Line statements and line comments
+
+Goldens from jinja2 3.1.6 (`upstream-spec/.venv/bin/python -I`); the
+`[...]` cases are edge cases of the lexer rules, checked the same way. -/
+
+def LX2 := "tests/test_lexnparse.py::TestLexer::"
+def angle : Environment :=
+  { blockStart := "<%", blockEnd := "%>", variableStart := "${", variableEnd := "}", commentStart := "<%#",
+    commentEnd := "%>", lineStatementPrefix := some "%" }
+def angle2 : Environment :=
+  { blockStart := "<%", blockEnd := "%>", variableStart := "${", variableEnd := "}", commentStart := "<%#",
+    commentEnd := "%>", lineStatementPrefix := some "%", lineCommentPrefix := some "##" }
+def angleLT : Environment :=
+  { blockStart := "<%", blockEnd := "%>", variableStart := "${", variableEnd := "}", commentStart := "<%#",
+    commentEnd := "%>", lineStatementPrefix := some "%", lineCommentPrefix := some "##", lstripBlocks := true,
+    trimBlocks := true }
+def cStyle1 : Environment :=
+  { variableStart := "${", variableEnd := "}", commentStart := "/*", commentEnd := "*/",
+    lineStatementPrefix := some "##", lineCommentPrefix := some "#" }
+def cStyle2 : Environment :=
+  { variableStart := "${", variableEnd := "}", commentStart := "/*", commentEnd := "*/",
+    lineStatementPrefix := some "#", lineCommentPrefix := some "##" }
+def lineEnv : Environment := { lineStatementPrefix := some "#", lineCommentPrefix := some "##" }
+
+def lineCases : List Case := [
+  renders (LX2 ++ "test_line_syntax") "<%# regular comment %>\n% for item in seq:\n    ${item}\n% endfor"
+    "\n    0\n    1\n    2\n    3\n    4\n" [("seq", range' 5)] (env := angle),
+  renders (LX2 ++ "test_line_syntax[comment]")
+    "<%# regular comment %>\n% for item in seq:\n    ${item} ## the rest of the stuff\n% endfor"
+    "\n    0\n    1\n    2\n    3\n    4\n" [("seq", range' 5)] (env := angle2),
+  renders (LX2 ++ "test_line_syntax_priority")
+    "/* ignore me.\n   I'm a multiline comment */\n## for item in seq:\n* ${item}          # this is just extra stuff\n## endfor"
+    "\n* 1\n* 2\n" [("seq", ints [1, 2])]
+    (env := cStyle1),
+  renders (LX2 ++ "test_line_syntax_priority[2]")
+    "/* ignore me.\n   I'm a multiline comment */\n# for item in seq:\n* ${item}          ## this is just extra stuff\n    ## extra stuff i just want to ignore\n# endfor"
+    "\n* 1\n\n* 2\n\n" [("seq", ints [1, 2])]
+    (env := cStyle2),
+  fails (RG ++ "test_weird_inline_comment") "% for item in seq {# missing #}\n...% endfor" isSyntax
+    (env := { lineStatementPrefix := some "%" }),
+  renders (RG ++ "test_stacked_locals_scoping_bug")
+    "# for j in [1, 2]:\n#   set x = 1\n#   for i in [1, 2]:\n#     print x\n#     if i % 2 == 0:\n#       set x = x + 1\n#     endif\n#   endfor\n# endfor\n# if a\n#   print 'A'\n# elif b\n#   print 'B'\n# elif c == d\n#   print 'C'\n# else\n#   print 'D'\n# endif\n    "
+    "1111C" [("a", 0), ("b", false), ("c", 42), ("d", .float 42 0)] (env := { lineStatementPrefix := some "#" }),
+  renders (LS ++ "test_lstrip_angle_bracket_simple") "    <% if True %>hello    <% endif %>" "hello    " (env := angleLT),
+  renders (LS ++ "test_lstrip_angle_bracket_comment") "    <%# if True %>hello    <%# endif %>" "hello    " (env := angleLT),
+  renders (LS ++ "test_lstrip_angle_bracket")
+    "    <%# regular comment %>\n    <% for item in seq %>\n${item} ## the rest of the stuff\n   <% endfor %>"
+    "0\n1\n2\n3\n4\n" [("seq", range' 5)] (env := angleLT),
+  renders (LS ++ "test_lstrip_angle_bracket_compact")
+    "    <%#regular comment%>\n    <%for item in seq%>\n${item} ## the rest of the stuff\n   <%endfor%>"
+    "0\n1\n2\n3\n4\n" [("seq", range' 5)] (env := angleLT),
+  renders (LX2 ++ "test_line_syntax[multiline-parens]") "# for x in [1,\n   2, 3]\n{{ x }}\n# endfor" "1\n2\n3\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[blank-lines-after]") "# if true\n\n\n  a\n# endif\nb" "  a\nb" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[statement-at-eof]") "x\n# if true\ny\n# endif" "x\ny\n" (env := lineEnv),
+  fails (LX2 ++ "test_line_syntax[prefix-at-eof]") "x\n#" isSyntax (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[comment-after-text]") "a ## c\nb" "a\nb" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[comment-after-blank]") "{%- if true -%}  ## c\n{% endif %}" "## c\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[comment-first]") "## only\nz" "\nz" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[minus]") "a   \n#- if true\nb\n# endif" "ab\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[comment-minus]") "a   ##- c\nb" "a\nb" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[crlf]") "# if true\r\nyes\r\n# endif\r\n" "yes\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[indent]") "\t \x0b# if true\nk\n  # endif" "k\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[not-line-start]") "a # if true\nb" "a # if true\nb" (env := lineEnv),
+  fails (LX2 ++ "test_line_syntax[unbalanced-at-eof]") "# if (true\n" isSyntax (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[set]") "# set x = 3\n{{ x }}" "3" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[colon]") "# for i in range(2):\n{{ i }}\n# endfor" "0\n1\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[raw]") "{% raw %}\n# if\n{% endraw %}" "\n# if\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[hash-in-text]") "a#b ## c" "a#b" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[trailing-blank-at-eof]") "# if true\nq\n# endif   " "q\n" (env := lineEnv),
+  renders (LX2 ++ "test_line_syntax[blank-prefix]") "   % if true\nw\n % endif\nv  ; gone\n" "w\nv"
+    (env := { lineStatementPrefix := some " %", lineCommentPrefix := some " ;" }),
+  renders (LX2 ++ "test_line_syntax[lstrip]") "  %% if true\n  x\n  {% if true %}y{% endif %}\n%% endif" "  x\ny\n"
+    (env := { lineStatementPrefix := some "%%", lstripBlocks := true })
+]
+
 def cases : List Case := filterCases ++ testCases ++ coreCases ++ lexCases ++ inheritanceCases ++ undefinedCases ++
-  loaderCases ++ importCases ++ macroCases
+  loaderCases ++ importCases ++ macroCases ++ lineCases
 
 def main : IO UInt32 := do
   let mut failures := 0

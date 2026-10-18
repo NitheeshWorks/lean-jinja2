@@ -84,6 +84,14 @@ theorem innerText_head {k : TokKind} (hk : InnerTok k) : ∃ c cs, innerText k =
   | op o => cases o <;> exact ⟨_, _, rfl, by decide⟩
   | _ => simp [InnerTok] at hk
 
+/-- A tag step that leaves input, or does not leave an open line statement,
+is the lexer's step. -/
+theorem step_tag {k : TagKind} {st : List Char} {ad : Bool} {l : List Char} {pos : Nat} {ts m r}
+    (h : stepTag dcfg k st ad l pos = .ok (ts, m, r)) (hm : r ≠ [] ∨ m.openLine = false) :
+    Lex.step dcfg (.tag k st ad) l pos = .ok (ts, m, r) := by
+  simp only [Lex.step, h, closeLine]
+  rcases hm with hm | hm <;> simp [hm]
+
 theorem inner_first {k : TokKind} (hk : InnerTok k) {st st' : List Char} (hs : stackStep st k = some st')
     (kd : TagKind) (rest : List Char) : ∃ ad, ∀ pos,
     Lex.step dcfg (.tag kd st false) (innerText k ++ ' ' :: rest) pos =
@@ -91,26 +99,26 @@ theorem inner_first {k : TokKind} (hk : InnerTok k) {st st' : List Char} (hs : s
   cases k with
   | name s =>
     simp [stackStep] at hs; subst hs
-    exact ⟨false, fun pos => by simpa [Lex.step, innerText] using name_step hk kd st rest pos⟩
+    exact ⟨false, fun pos => step_tag (by simpa [innerText] using name_step hk kd st rest pos) (Or.inl (by simp))⟩
   | int n =>
     simp [stackStep] at hs; subst hs
-    exact ⟨false, fun pos => by simpa [Lex.step, innerText] using int_step n kd st rest pos⟩
+    exact ⟨false, fun pos => step_tag (by simpa [innerText] using int_step n kd st rest pos) (Or.inl (by simp))⟩
   | float m s =>
     simp [stackStep] at hs; subst hs
-    exact ⟨false, fun pos => by simpa [Lex.step, innerText] using float_step m s kd st rest pos⟩
+    exact ⟨false, fun pos => step_tag (by simpa [innerText] using float_step m s kd st rest pos) (Or.inl (by simp))⟩
   | str s =>
     simp [stackStep] at hs; subst hs
-    exact ⟨false, fun pos => by simpa [Lex.step, innerText] using str_step s kd st rest pos⟩
-  | op o => exact ⟨_, fun pos => by simpa [Lex.step, innerText] using op_step o kd st st' hs rest pos⟩
+    exact ⟨false, fun pos => step_tag (by simpa [innerText] using str_step s kd st rest pos) (Or.inl (by simp))⟩
+  | op o => exact ⟨_, fun pos => step_tag (by simpa [innerText] using op_step o kd st st' hs rest pos) (Or.inl (by simp))⟩
   | _ => simp [InnerTok] at hk
 
 theorem inner_run : ∀ (ks : List TokKind) (st st' : List Char), InnerAll ks → stackAfter st ks = some st' →
-    ∀ (kd : TagKind) (rest : List Char), NoLead rest →
+    ∀ (kd : TagKind), kd ≠ .line → ∀ (rest : List Char), NoLead rest →
     ∃ ts, Run (.tag kd st false) (Pretty.render ks ++ rest) ts (.tag kd st' false) rest ∧ significant ts = ks
-  | [], st, st', _, h, kd, rest, _ => by
+  | [], st, st', _, h, kd, _, rest, _ => by
     simp [stackAfter] at h; subst h
     exact ⟨[], by simpa [Pretty.render] using Run.refl _ rest, rfl⟩
-  | k :: ks, st, st', hin, h, kd, rest, hr => by
+  | k :: ks, st, st', hin, h, kd, hkd, rest, hr => by
     simp only [innerAll_cons] at hin
     simp only [stackAfter_cons] at h
     cases hs : stackStep st k with
@@ -126,12 +134,12 @@ theorem inner_run : ∀ (ks : List TokKind) (st st' : List Char), InnerAll ks �
           intro x hx
           simp [Pretty.render, List.flatMap_cons, tokText_inner hk', hc] at hx
           subst hx; exact hsp
-      obtain ⟨ts, hrun, hsig⟩ := inner_run ks s1 st' hin.2 h kd rest hr
+      obtain ⟨ts, hrun, hsig⟩ := inner_run ks s1 st' hin.2 h kd hkd rest hr
       obtain ⟨ad, hfirst⟩ := inner_first hin.1 hs kd (Pretty.render ks ++ rest)
       obtain ⟨c, cs, hc, -⟩ := innerText_head hin.1
       have hws : ∀ pos, Lex.step dcfg (.tag kd s1 ad) (' ' :: (Pretty.render ks ++ rest)) pos =
           .ok ([⟨.ws, [' ']⟩], .tag kd s1 false, Pretty.render ks ++ rest) := fun pos => by
-        simpa [Lex.step] using ws_step kd s1 ad hnl pos
+        exact step_tag (ws_step kd hkd s1 ad hnl pos) (Or.inr (by cases kd <;> simp_all [LexMode.openLine]))
       have hrender : Pretty.render (k :: ks) ++ rest = innerText k ++ ' ' :: (Pretty.render ks ++ rest) := by
         simp [Pretty.render, List.flatMap_cons, tokText_inner hin.1]
       refine ⟨[⟨k, innerText k⟩] ++ ([⟨.ws, [' ']⟩] ++ ts), ?_, ?_⟩

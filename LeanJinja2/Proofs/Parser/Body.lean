@@ -189,10 +189,7 @@ theorem body_ok : (b : List Node) → Node.BodyWF b → ∀ (stack : TagStack) (
           cases h : s.isEmpty with
           | false => rfl
           | true => exact absurd (by simpa [String.isEmpty_iff] using h) hnd.1
-        have hcons : consText s rest = .text s :: rest := by
-          cases rest with
-          | nil => simp [consText, hne]
-          | cons r rs => cases r <;> simp_all [consText, Node.isText]
+        have hcons : consText s rest = .text s :: rest := by simp [consText, hne]
         simp [Pretty.nodes, Pretty.node, subparse, bind, Except.bind, ih, hcons]
       | output e =>
         simp only [Node.WF] at hnd

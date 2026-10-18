@@ -12,8 +12,11 @@ by its *length* and emits tokens whose `raw` is exactly that prefix (split by
 (`lex_print_roundtrip`, `Proofs/Lexer.lean`).
 
 States (upstream's state stack): `root` (template data), and inside a
-`{% %}` or `{{ }}` tag with its bracket-balancing stack. Comments and raw
-blocks are recognised in one step from their start.
+`{% %}` or `{{ }}` tag or a line statement, with its bracket-balancing stack.
+Comments, line comments and raw blocks are recognised in one step from their
+start. A line statement's begin and end are `blockBegin`/`blockEnd` tokens,
+as upstream's `wrap` makes them; its end at the end of input is an empty
+`blockEnd` (`closeLine`).
 
 Whitespace control is decided here, as upstream does: `-` strips the adjacent
 whitespace, `lstrip_blocks` strips the indentation before a block or comment
@@ -35,16 +38,34 @@ structure LexError where
   pos : Nat
   deriving Repr, Inhabited, BEq, DecidableEq
 
-/-- Which kind of tag the lexer is inside. -/
+/-- Which kind of tag the lexer is inside (`line`: a line statement). -/
 inductive TagKind where
-  | block | var
+  | block | var | line
   deriving DecidableEq, Repr, Inhabited, BEq
+
+/-- What precedes a position in template data, for the anchors of the line
+rules: a line break or the start of input (`^`; upstream's `line_starting`),
+other whitespace, or anything else (`(?<=\S)`). -/
+inductive Prev where
+  | line | space | text
+  deriving DecidableEq, Repr, Inhabited
+
+/-- The class of a character, as the one before a position (printable ASCII
+first: it is neither a line break nor whitespace). -/
+def prevClass (c : Char) : Prev :=
+  if 32 < c.val && c.val < 127 then .text
+  else if isNewline c then .line else if isSpace c then .space else .text
+
+/-- The class of the last character (`text` for none). -/
+def prevOf (l : List Char) : Prev :=
+  match l.getLast? with
+  | some c => prevClass c
+  | none => .text
 
 /-- The lexer state. -/
 inductive LexMode where
-  /-- Template data; `lineStart` says the previous character was a line break
-  (or this is the start of input), upstream's `line_starting`. -/
-  | root (lineStart : Bool)
+  /-- Template data, after a character of class `prev`. -/
+  | root (prev : Prev)
   /-- Inside a tag. `stack` holds the closing brackets expected; `afterDot`
   says the last character was `.` (the float rule's look-behind). -/
   | tag (k : TagKind) (stack : List Char) (afterDot : Bool)
@@ -57,7 +78,16 @@ inductive TagStart where
   | comment (len : Nat) (sign : Option Char)
   | block (len : Nat) (sign : Option Char)
   | var (len : Nat) (sign : Option Char)
+  /-- A line statement's start: indentation, prefix and sign. -/
+  | lineStmt (len : Nat) (sign : Option Char)
+  /-- A line comment's start: the blanks before it, prefix and sign. -/
+  | lineComment (len : Nat) (sign : Option Char)
   deriving DecidableEq, Repr, Inhabited
+
+/-- Whether the mode is a line statement with no open bracket. -/
+def LexMode.openLine : LexMode → Bool
+  | .tag .line [] _ => true
+  | _ => false
 
 namespace Lex
 
@@ -148,40 +178,78 @@ def rawEndAt (cfg : LexConfig) (l : List Char) : Option (Nat × Option Char) :=
     else none
   else none
 
-/-- The begin delimiters, in upstream's priority order: longer first, then by
-token name descending (`variable_begin`, `comment_begin`, `block_begin`). -/
+/-- Indentation before a line statement prefix: upstream's `[ \t\v]`. -/
+def isIndent (c : Char) : Bool := c == ' ' || c == '\t' || c == '\x0b'
+
+/-- Blanks before a line comment prefix: upstream's `[^\S\r\n]`. -/
+def isBlank (c : Char) : Bool := isSpace c && !isNewline c
+
+/-- The last offset `k` in `i, ..., i + n` (and `≤ i + l.length`) where `d`
+is a prefix of the text, else `acc`: a regex `[...]*d` backtracking from the
+longest run, in one forward pass. -/
+def lastPre (d : List Char) (l : List Char) (n i : Nat) (acc : Option Nat) : Option Nat :=
+  let acc := if d.isPrefixOf l then some i else acc
+  match n, l with
+  | n + 1, _ :: cs => lastPre d cs n (i + 1) acc
+  | _, _ => acc
+
+/-- `[cls]*d(-|+|)` at the head: its length and sign. -/
+def linePrefixAt (cls : Char → Bool) (d : String) (l : List Char) : Option (Nat × Option Char) :=
+  match lastPre d.toList l (l.takeWhile cls).length 0 none with
+  | some k =>
+    let sg := signAt (l.drop (k + d.length))
+    some (k + d.length + signLen sg, sg)
+  | none => none
+
+/-- The begin rules, in upstream's priority order: longer first, then by
+token name descending (`variable_begin`, `linestatement_begin`,
+`linecomment_begin`, `comment_begin`, `block_begin`). -/
 def beginOrder (cfg : LexConfig) : List (Nat × String) :=
-  -- rank: 2 = variable, 1 = comment, 0 = block
-  let ds := [(2, cfg.variableStart), (1, cfg.commentStart), (0, cfg.blockStart)]
+  -- rank: 4 variable, 3 line statement, 2 line comment, 1 comment, 0 block
+  let ds := [(4, cfg.variableStart), (1, cfg.commentStart), (0, cfg.blockStart)] ++
+    (cfg.lineStatementPrefix.map ((3, ·))).toList ++ (cfg.lineCommentPrefix.map ((2, ·))).toList
   let le := fun (a b : Nat × String) => a.2.length > b.2.length || (a.2.length == b.2.length && a.1 ≥ b.1)
-  -- a stable insertion sort (the list has three entries)
+  -- an insertion sort (the list has at most five entries)
   let rec ins (x : Nat × String) : List (Nat × String) → List (Nat × String)
     | [] => [x]
     | y :: ys => if le x y then x :: y :: ys else y :: ins x ys
   ds.foldr ins []
 
-/-- A tag start at the head of `l`, if any. -/
-def tagAt (cfg : LexConfig) (l : List Char) : Option TagStart :=
+/-- The begin rule of rank `rank` and delimiter or prefix `d` at the head of
+`l`, after a character of class `prev`. A line statement starts a line
+(`^[ \t\v]*prefix`); a line comment starts a line or follows text
+(`(?:^|(?<=\S))[^\S\r\n]*prefix`). -/
+def ruleAt (prev : Prev) (l : List Char) (rank : Nat) (d : String) : Option TagStart :=
+  if rank == 3 then
+    if prev == .line then (linePrefixAt isIndent d l).map (fun r => .lineStmt r.1 r.2) else none
+  else if rank == 2 then
+    if prev != .space then (linePrefixAt isBlank d l).map (fun r => .lineComment r.1 r.2) else none
+  else if pre d l then
+    let sg := signAt (l.drop d.length)
+    let n := d.length + signLen sg
+    some (if rank == 4 then .var n sg else if rank == 1 then .comment n sg else .block n sg)
+  else none
+
+/-- A tag start at the head of `l`, after a character of class `prev`. -/
+def tagAt (cfg : LexConfig) (prev : Prev) (l : List Char) : Option TagStart :=
   match rawBeginAt cfg l with
   | some (n, sg) => some (.raw n sg)
   | none =>
     let rec pick : List (Nat × String) → Option TagStart
       | [] => none
       | (rank, d) :: ds =>
-        if pre d l then
-          let sg := signAt (l.drop d.length)
-          let n := d.length + signLen sg
-          some (if rank == 2 then .var n sg else if rank == 1 then .comment n sg else .block n sg)
-        else pick ds
+        match ruleAt prev l rank d with
+        | some t => some t
+        | none => pick ds
     pick (beginOrder cfg)
 
 /-- The first tag start in `l`: the length of the text before it, and the tag. -/
-def findTag (cfg : LexConfig) : List Char → Nat → Option (Nat × TagStart)
-  | [], _ => none
-  | l@(_ :: cs), i =>
-    match tagAt cfg l with
+def findTag (cfg : LexConfig) : Prev → List Char → Nat → Option (Nat × TagStart)
+  | _, [], _ => none
+  | prev, l@(c :: cs), i =>
+    match tagAt cfg prev l with
     | some t => some (i, t)
-    | none => findTag cfg cs (i + 1)
+    | none => findTag cfg (prevClass c) cs (i + 1)
 
 /-- The first position where `m` matches: (offset, match length). -/
 def findMatch {α : Type} (m : List Char → Option α) : List Char → Nat → Option (Nat × α)
@@ -542,9 +610,6 @@ def emit (f : List Char → List Token × List Char) (m : LexMode) (l : List Cha
     Except LexError (List Token × LexMode × List Char) :=
   .ok ((f l).1, m, (f l).2)
 
-/-- Whether the characters end with a line break. -/
-def endsNewline (l : List Char) : Bool := (l.getLast?.map isNewline).getD false
-
 /-- The value of the string literal of `n` characters at the head of `l`:
 its content with newlines normalised and escapes resolved. -/
 def strValue (cfg : LexConfig) (l : List Char) (n : Nat) : Except String String :=
@@ -558,50 +623,69 @@ def closerOf : Op → Option Char
 def isCloser : Op → Option Char
   | .rparen => some ')' | .rbracket => some ']' | .rbrace => some '}' | _ => none
 
+/-- Upstream's line-statement end `\s*(\n|$)`: the whitespace up to and
+including its last line break, or all of it at the end of input. -/
+def lineEndAt (l : List Char) : Option Nat :=
+  let w := spaceLen l
+  if (l.drop w).isEmpty then some w
+  else
+    let k := afterLastNewline (l.take w)
+    if k > 0 then some k else none
+
+/-- The length of the rest of the line (up to a line break). -/
+def lineRest (l : List Char) : Nat := (l.takeWhile (fun c => !isNewline c)).length
+
 /-- One step in `root` mode on non-empty input. -/
-def stepRoot (cfg : LexConfig) (lineStart : Bool) (l : List Char) (pos : Nat) :
+def stepRoot (cfg : LexConfig) (prev : Prev) (l : List Char) (pos : Nat) :
     Except LexError (List Token × LexMode × List Char) :=
-  match findTag cfg l 0 with
+  match findTag cfg prev l 0 with
   | none =>
-    emit (cutData cfg l.length) (.root false) l
+    emit (cutData cfg l.length) (.root .text) l
   | some (i, t) =>
     let text := l.take i
     let (isVar, sign) := match t with
       | .raw _ s => (false, s) | .comment _ s => (false, s)
       | .block _ s => (false, s) | .var _ s => (true, s)
-    let keep := stripSplit cfg isVar sign lineStart text
+      | .lineStmt _ s => (false, s) | .lineComment _ s => (false, s)
+    let keep := stripSplit cfg isVar sign (prev == .line) text
     let pre := seq (cutData cfg keep) (cutOpt .ws (i - keep))
     match t with
     | .var n _ =>
       emit (seq pre (cut .varBegin n)) (.tag .var [] false) l
     | .block n _ =>
       emit (seq pre (cut .blockBegin n)) (.tag .block [] false) l
+    | .lineStmt n _ =>
+      emit (seq pre (cut .blockBegin n)) (.tag .line [] false) l
+    | .lineComment n _ =>
+      let j := lineRest (l.drop (i + n))
+      emit (seq pre (cut .comment (n + j))) (.root (prevOf (l.take (i + n + j)))) l
     | .comment n _ =>
       let body := l.drop (i + n)
       match findMatch (commentEndAt cfg) body 0 with
       | none => .error ⟨"Missing end of comment tag", pos + i⟩
       | some (j, e) =>
-        emit (seq pre (cut .comment (n + j + e))) (.root (endsNewline (l.take (i + n + j + e)))) l
+        emit (seq pre (cut .comment (n + j + e))) (.root (prevOf (l.take (i + n + j + e)))) l
     | .raw n _ =>
       let body := l.drop (i + n)
       match findMatch (rawEndAt cfg) body 0 with
       | none => .error ⟨"Missing end of raw directive", pos + i⟩
       | some (j, (e, esign)) =>
         let inner := body.take j
-        let keep2 := stripSplit cfg false esign (endsNewline (l.take (i + n))) inner
+        let keep2 := stripSplit cfg false esign (prevOf (l.take (i + n)) == .line) inner
         emit (seq pre (seq (cut .rawBegin n)
             (seq (cutData cfg keep2) (seq (cutOpt .ws (j - keep2)) (cut .rawEnd e)))))
-          (.root (endsNewline (l.take (i + n + j + e)))) l
+          (.root (prevOf (l.take (i + n + j + e)))) l
 
 /-- One step inside a tag on non-empty input. -/
 def stepTag (cfg : LexConfig) (k : TagKind) (stack : List Char) (afterDot : Bool)
     (l : List Char) (pos : Nat) : Except LexError (List Token × LexMode × List Char) :=
   let endM := if stack.isEmpty then
-      (match k with | .block => blockEndAt cfg l | .var => varEndAt cfg l)
+      (match k with | .block => blockEndAt cfg l | .var => varEndAt cfg l | .line => lineEndAt l)
     else none
   match endM with
   | some n =>
-    emit (cut (match k with | .block => .blockEnd | .var => .varEnd) n) (.root (endsNewline (l.take n))) l
+    emit (cut (match k with | .block => .blockEnd | .var => .varEnd | .line => .blockEnd) n)
+      (.root (prevOf (l.take n))) l
   | none =>
     let sp := spaceLen l
     if sp > 0 then
@@ -644,12 +728,20 @@ def stepTag (cfg : LexConfig) (k : TagKind) (stack : List Char) (afterDot : Bool
     | none =>
       .error ⟨s!"unexpected char {repr (l.headD ' ')} at {pos}", pos⟩
 
+/-- A line statement still open at the end of input ends there (upstream's
+`$` alternative of the end rule): an empty `blockEnd`. -/
+def closeLine : Except LexError (List Token × LexMode × List Char) →
+    Except LexError (List Token × LexMode × List Char)
+  | .ok (ts, m, r) =>
+    if r.isEmpty && m.openLine then .ok (ts ++ [⟨.blockEnd, []⟩], .root .text, r) else .ok (ts, m, r)
+  | .error e => .error e
+
 /-- One lexer step on non-empty input. -/
 def step (cfg : LexConfig) (m : LexMode) (l : List Char) (pos : Nat) :
     Except LexError (List Token × LexMode × List Char) :=
-  match m with
-  | .root ls => stepRoot cfg ls l pos
-  | .tag k st ad => stepTag cfg k st ad l pos
+  closeLine (match m with
+    | .root ls => stepRoot cfg ls l pos
+    | .tag k st ad => stepTag cfg k st ad l pos)
 
 /-- How many characters a step's tokens cover. -/
 def consumed (ts : List Token) : Nat := ts.foldl (fun n t => n + t.raw.length) 0
@@ -682,7 +774,7 @@ end Lex
 def lexList (cfg : LexConfig) (l : List Char) : Except LexError (List Token) :=
   let k := Lex.trailingNewlineLen cfg l
   let body := l.take (l.length - k)
-  match Lex.loop cfg (body.length + 1) (.root true) body 0 [] with
+  match Lex.loop cfg (body.length + 1) (.root .line) body 0 [] with
   | .error e => .error e
   | .ok ts => .ok (ts ++ (if k = 0 then [] else [⟨.ws, l.drop (l.length - k)⟩]))
 

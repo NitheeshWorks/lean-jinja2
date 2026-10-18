@@ -114,19 +114,45 @@ def rawEndAt (cfg : LexConfig) (p : s.Pos) : Option (Nat × Option Char) :=
     else none
   else none
 
-def pick (p : s.Pos) : List (Nat × String) → Option TagStart
+def lastPre (d : List Char) (p : s.Pos) (n i : Nat) (acc : Option Nat) : Option Nat :=
+  let acc := if preW p d then some i else acc
+  match n with
+  | n + 1 => if h : p = s.endPos then acc else lastPre d (p.next h) n (i + 1) acc
+  | 0 => acc
+
+def linePrefixAt (cls : Char → Bool) (d : List Char) (p : s.Pos) : Option (Nat × Option Char) :=
+  match lastPre d p (countWhile cls p 0) 0 none with
+  | some k =>
+    let sg := signAt (advN p (k + d.length))
+    some (k + d.length + Lex.signLen sg, sg)
+  | none => none
+
+/-- `Lex.ruleAt`, with the delimiter as a list (converted once, by `ctx`). -/
+def ruleAt (prev : Prev) (p : s.Pos) (rank : Nat) (d : List Char) : Option TagStart :=
+  if rank == 3 then
+    if prev == .line then (linePrefixAt Lex.isIndent d p).map (fun r => .lineStmt r.1 r.2) else none
+  else if rank == 2 then
+    if prev != .space then (linePrefixAt Lex.isBlank d p).map (fun r => .lineComment r.1 r.2) else none
+  else if preW p d then
+    let sg := signAt (advN p d.length)
+    let n := d.length + Lex.signLen sg
+    some (if rank == 4 then .var n sg else if rank == 1 then .comment n sg else .block n sg)
+  else none
+
+def pick (prev : Prev) (p : s.Pos) : List (Nat × List Char) → Option TagStart
   | [] => none
   | (rank, d) :: ds =>
-    if pre d p then
-      let sg := signAt (advN p d.length)
-      let n := d.length + Lex.signLen sg
-      some (if rank == 2 then .var n sg else if rank == 1 then .comment n sg else .block n sg)
-    else pick p ds
+    match ruleAt prev p rank d with
+    | some t => some t
+    | none => pick prev p ds
 
-def tagAt (cfg : LexConfig) (p : s.Pos) : Option TagStart :=
-  match rawBeginAt cfg p with
+/-- `Lex.tagAt`, with the rule order `ord` (`Lex.beginOrder cfg`, delimiters
+as lists) computed once by the caller. -/
+def tagAt (cfg : LexConfig) (bs : List Char) (ord : List (Nat × List Char)) (prev : Prev) (p : s.Pos) :
+    Option TagStart :=
+  match (if preW p bs then rawBeginAt cfg p else none) with
   | some (n, sg) => some (.raw n sg)
-  | none => pick p (Lex.beginOrder cfg)
+  | none => pick prev p ord
 
 /-- The characters a tag can start with: the first character of each begin
 delimiter (`none` for an empty one, which would match anywhere). -/
@@ -144,17 +170,36 @@ def isCand : List (Option Char) → Char → Bool
   | [], _ => false
   | o :: os, c => candOne o c || isCand os c
 
+/-- Whether a line prefix is set (then a run of whitespace may start a line
+rule). -/
+def lineOn (cfg : LexConfig) : Bool := cfg.lineStatementPrefix.isSome || cfg.lineCommentPrefix.isSome
+
+/-- What the scan for tags computes once per template: the candidate first
+characters, whether line rules are on, and the rule order. -/
+structure Ctx where
+  cs : List (Option Char)
+  lc : Bool
+  ord : List (Nat × List Char)
+  bs : List Char
+
+def ctx (cfg : LexConfig) : Ctx :=
+  ⟨cands cfg, lineOn cfg, (Lex.beginOrder cfg).map (fun x => (x.1, x.2.toList)), cfg.blockStart.toList⟩
+
 /-- The first tag start from `p`, counting from `i`; when there is none, the
 count at the end (`i` plus the characters left). Only positions holding a
-delimiter's first character are tried. -/
-def findTag (cfg : LexConfig) (cs : List (Option Char)) (p : s.Pos) (i : Nat) :
+delimiter's first character, or (`lc`, with a line prefix set) starting a
+run of whitespace, are tried. Without line rules the class of the previous
+character is not needed, and not computed. -/
+def findTag (cfg : LexConfig) (k : Ctx) (prev : Prev) (p : s.Pos) (i : Nat) :
     Except Nat (Nat × TagStart) :=
   if h : p = s.endPos then .error i
-  else if isCand cs (p.get h) then
-    match tagAt cfg p with
-    | some t => .ok (i, t)
-    | none => findTag cfg cs (p.next h) (i + 1)
-  else findTag cfg cs (p.next h) (i + 1)
+  else
+    let c := p.get h
+    if isCand k.cs c || (k.lc && prev != .space && isSpace c) then
+      match tagAt cfg k.bs k.ord prev p with
+      | some t => .ok (i, t)
+      | none => findTag cfg k (if k.lc then prevClass c else .text) (p.next h) (i + 1)
+    else findTag cfg k (if k.lc then prevClass c else .text) (p.next h) (i + 1)
 termination_by (rest p).length
 decreasing_by all_goals exact rest_next_length p h
 
@@ -210,8 +255,18 @@ def stripSplit (cfg : LexConfig) (isVar : Bool) (sign : Option Char) (lineStart 
     then lpos else len
   else foldTake lenStep 0 p n
 
-/-- Whether the `n` characters at `p` end with a line break. -/
-def endsNewline (p : s.Pos) (n : Nat) : Bool := foldTake (fun _ c => isNewline c) false p n
+/-- The class of the last of the `n` characters at `p`. -/
+def prevOf (p : s.Pos) (n : Nat) : Prev := foldTake (fun _ c => prevClass c) .text p n
+
+/-- `Lex.lineEndAt` in place. -/
+def lineEndAt (p : s.Pos) : Option Nat :=
+  let w := spaceLen p
+  if (peek (advN p w)).isNone then some w
+  else
+    let k := (foldTake nlStep (0, 0) p w).2
+    if k > 0 then some k else none
+
+def lineRest (p : s.Pos) : Nat := countWhile (fun c => !isNewline c) p 0
 
 /-! ## Literals inside tags -/
 
@@ -376,46 +431,53 @@ def emit (f : Cut s) (m : LexMode) (p : s.Pos) : Except LexError (List TokL × L
 
 /-! ## Steps -/
 
-def stepRoot (cfg : LexConfig) (cs : List (Option Char)) (lineStart : Bool) (p : s.Pos)
+def stepRoot (cfg : LexConfig) (k : Ctx) (prev : Prev) (p : s.Pos)
     (pos : Nat) : Except LexError (List TokL × LexMode × s.Pos) :=
-  match findTag cfg cs p 0 with
+  match findTag cfg k prev p 0 with
   | .error len =>
-    emit (cutData cfg len) (.root false) p
+    emit (cutData cfg len) (.root .text) p
   | .ok (i, t) =>
     let (isVar, sign) := match t with
       | .raw _ s => (false, s) | .comment _ s => (false, s)
       | .block _ s => (false, s) | .var _ s => (true, s)
-    let keep := stripSplit cfg isVar sign lineStart p i
+      | .lineStmt _ s => (false, s) | .lineComment _ s => (false, s)
+    let keep := stripSplit cfg isVar sign (prev == .line) p i
     let pre := seq (cutData cfg keep) (cutOpt .ws (i - keep))
     match t with
     | .var n _ =>
       emit (seq pre (cut .varBegin n)) (.tag .var [] false) p
     | .block n _ =>
       emit (seq pre (cut .blockBegin n)) (.tag .block [] false) p
+    | .lineStmt n _ =>
+      emit (seq pre (cut .blockBegin n)) (.tag .line [] false) p
+    | .lineComment n _ =>
+      let j := lineRest (advN p (i + n))
+      emit (seq pre (cut .comment (n + j))) (.root (prevOf p (i + n + j))) p
     | .comment n _ =>
       let body := advN p (i + n)
       match findMatchC (commentCand cfg.commentEnd.toList.head?) (commentEndAt cfg) body 0 with
       | none => .error ⟨"Missing end of comment tag", pos + i⟩
       | some (j, e) =>
-        emit (seq pre (cut .comment (n + j + e))) (.root (endsNewline p (i + n + j + e))) p
+        emit (seq pre (cut .comment (n + j + e))) (.root (prevOf p (i + n + j + e))) p
     | .raw n _ =>
       let body := advN p (i + n)
       match findMatchC (candOne cfg.blockStart.toList.head?) (rawEndAt cfg) body 0 with
       | none => .error ⟨"Missing end of raw directive", pos + i⟩
       | some (j, (e, esign)) =>
-        let keep2 := stripSplit cfg false esign (endsNewline p (i + n)) body j
+        let keep2 := stripSplit cfg false esign (prevOf p (i + n) == .line) body j
         emit (seq pre (seq (cut .rawBegin n)
             (seq (cutData cfg keep2) (seq (cutOpt .ws (j - keep2)) (cut .rawEnd e)))))
-          (.root (endsNewline p (i + n + j + e))) p
+          (.root (prevOf p (i + n + j + e))) p
 
 def stepTag (cfg : LexConfig) (k : TagKind) (stack : List Char) (afterDot : Bool)
     (p : s.Pos) (pos : Nat) : Except LexError (List TokL × LexMode × s.Pos) :=
   let endM := if stack.isEmpty then
-      (match k with | .block => blockEndAt cfg p | .var => varEndAt cfg p)
+      (match k with | .block => blockEndAt cfg p | .var => varEndAt cfg p | .line => lineEndAt p)
     else none
   match endM with
   | some n =>
-    emit (cut (match k with | .block => .blockEnd | .var => .varEnd) n) (.root (endsNewline p n)) p
+    emit (cut (match k with | .block => .blockEnd | .var => .varEnd | .line => .blockEnd) n)
+      (.root (prevOf p n)) p
   | none =>
     let sp := spaceLen p
     if sp > 0 then
@@ -459,25 +521,31 @@ def stepTag (cfg : LexConfig) (k : TagKind) (stack : List Char) (afterDot : Bool
     | none =>
       .error ⟨s!"unexpected char {repr ((peek p).getD ' ')} at {pos}", pos⟩
 
-def step (cfg : LexConfig) (cs : List (Option Char)) (m : LexMode) (p : s.Pos) (pos : Nat) :
-    Except LexError (List TokL × LexMode × s.Pos) :=
-  match m with
-  | .root ls => stepRoot cfg cs ls p pos
-  | .tag k st ad => stepTag cfg k st ad p pos
+def closeLine : Except LexError (List TokL × LexMode × s.Pos) →
+    Except LexError (List TokL × LexMode × s.Pos)
+  | .ok (ts, m, q) =>
+    if (peek q).isNone && m.openLine then .ok (ts ++ [⟨.blockEnd, 0⟩], .root .text, q) else .ok (ts, m, q)
+  | .error e => .error e
+
+def step (cfg : LexConfig) (k : Ctx) (m : LexMode) (p : s.Pos)
+    (pos : Nat) : Except LexError (List TokL × LexMode × s.Pos) :=
+  closeLine (match m with
+    | .root ls => stepRoot cfg k ls p pos
+    | .tag k st ad => stepTag cfg k st ad p pos)
 
 def consumed (ts : List TokL) : Nat := ts.foldl (fun n t => n + t.len) 0
 
 /-- The loop, as `Lex.loop`: tail recursive, the tokens so far reversed. -/
-def loop (cfg : LexConfig) (cs : List (Option Char)) :
+def loop (cfg : LexConfig) (k : Ctx) :
     Nat → LexMode → s.Pos → Nat → List TokL → Except LexError (List TokL)
   | fuel, m, p, pos, acc =>
     if p = s.endPos then .ok acc.reverse
     else match fuel with
       | 0 => .error ⟨"lexer step bound exceeded", pos⟩
       | fuel + 1 =>
-        match step cfg cs m p pos with
+        match step cfg k m p pos with
         | .error e => .error e
-        | .ok (ts, m', q) => loop cfg cs fuel m' q (pos + consumed ts) (ts.reverse ++ acc)
+        | .ok (ts, m', q) => loop cfg k fuel m' q (pos + consumed ts) (ts.reverse ++ acc)
 
 end LexF
 
@@ -486,7 +554,7 @@ lengths). `lexFast_eq` proves it equal to `lex`. -/
 def lexFast (cfg : LexConfig) (src : String) : Except LexError (List TokL) :=
   let k := Lex.trailingNewlineLen cfg (src.takeEnd 2).copy.toList
   let body := src.dropEnd k
-  match LexF.loop cfg (LexF.cands cfg) (src.length - k + 1) (.root true) body.startPos 0 [] with
+  match LexF.loop cfg (LexF.ctx cfg) (src.length - k + 1) (.root .line) body.startPos 0 [] with
   | .error e => .error e
   | .ok ts => .ok (ts ++ (if k = 0 then [] else [⟨.ws, k⟩]))
 

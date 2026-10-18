@@ -70,14 +70,53 @@ theorem rawEndAt_eq (cfg : LexConfig) (p : s.Pos) :
   simp only [rawEndAt, Lex.rawEndAt, blockEndAt_eq]; to_spec
   split <;> (try split) <;> (try split) <;> simp_all
 
-theorem pick_eq (p : s.Pos) (ds : List (Nat × String)) :
-    pick p ds = Lex.tagAt.pick (rest p) ds := by
+theorem lastPre_eq (d : List Char) (n : Nat) : ∀ (p : s.Pos) (i : Nat) (acc : Option Nat),
+    lastPre d p n i acc = Lex.lastPre d (rest p) n i acc := by
+  induction n with
+  | zero => intro p i acc; unfold lastPre Lex.lastPre; simp only [preW_eq]; all_goals (cases rest p <;> rfl)
+  | succ n ih =>
+    intro p i acc
+    unfold lastPre
+    by_cases hp : p = s.endPos
+    · subst hp; simp only [preW_eq, rest_endPos, ↓reduceDIte]; unfold Lex.lastPre; rfl
+    · simp only [hp, ↓reduceDIte, preW_eq, ih]
+      conv => rhs; rw [rest_next p hp]
+      conv => lhs; rw [rest_next p hp]
+      rfl
+
+theorem linePrefixAt_eq (cls : Char → Bool) (d : String) (p : s.Pos) :
+    linePrefixAt cls d.toList p = Lex.linePrefixAt cls d (rest p) := by
+  unfold linePrefixAt Lex.linePrefixAt
+  rw [lastPre_eq, countWhile_eq, Nat.zero_add]
+  cases Lex.lastPre d.toList (rest p) _ 0 none with
+  | none => rfl
+  | some k => simp only [signAt_eq, rest_advN, String.length_toList]
+
+theorem ruleAt_eq (prev : Prev) (p : s.Pos) (rank : Nat) (d : String) :
+    ruleAt prev p rank d.toList = Lex.ruleAt prev (rest p) rank d := by
+  simp only [ruleAt, Lex.ruleAt, linePrefixAt_eq, preW_eq, String.length_toList]; to_spec; rfl
+
+theorem pick_eq (prev : Prev) (p : s.Pos) (ds : List (Nat × String)) :
+    pick prev p (ds.map (fun x => (x.1, x.2.toList))) = Lex.tagAt.pick prev (rest p) ds := by
   induction ds with
   | nil => rfl
-  | cons d ds ih => simp only [pick, Lex.tagAt.pick, ih]; to_spec
+  | cons d ds ih =>
+    simp only [List.map_cons, pick, Lex.tagAt.pick, ih, ruleAt_eq]
+    cases Lex.ruleAt prev (rest p) d.fst d.snd <;> rfl
 
-theorem tagAt_eq (cfg : LexConfig) (p : s.Pos) : tagAt cfg p = Lex.tagAt cfg (rest p) := by
-  simp only [tagAt, Lex.tagAt, rawBeginAt_eq, pick_eq]; rfl
+theorem tagAt_eq (cfg : LexConfig) (prev : Prev) (p : s.Pos) :
+    tagAt cfg (ctx cfg).bs (ctx cfg).ord prev p = Lex.tagAt cfg prev (rest p) := by
+  have hraw : (if preW p (ctx cfg).bs then rawBeginAt cfg p else none) = rawBeginAt cfg p := by
+    split
+    · rfl
+    · rename_i h
+      rw [rawBeginAt_eq]; unfold Lex.rawBeginAt
+      rw [preW_eq] at h
+      simp [Lex.pre, ctx] at h ⊢
+      simp [h]
+  unfold tagAt
+  rw [hraw]
+  simp only [Lex.tagAt, ctx, rawBeginAt_eq, pick_eq]; rfl
 
 
 theorem pre_cons_false {d : String} {c : Char} (r : List Char)
@@ -90,14 +129,56 @@ theorem pre_cons_false {d : String} {c : Char} (r : List Char)
     simp only [List.head?_cons, Option.all_some] at h
     simp [List.isPrefixOf, h]
 
-theorem pick_none {c : Char} (r : List Char) (ds : List (Nat × String))
-    (h : ∀ x ∈ ds, x.2.toList.head?.all (· == c) = false) : Lex.tagAt.pick (c :: r) ds = none := by
+theorem pick_none {prev : Prev} {c : Char} (r : List Char) (ds : List (Nat × String))
+    (h : ∀ x ∈ ds, Lex.ruleAt prev (c :: r) x.1 x.2 = none) : Lex.tagAt.pick prev (c :: r) ds = none := by
   induction ds with
   | nil => rfl
   | cons d ds ih =>
     simp only [Lex.tagAt.pick]
-    rw [pre_cons_false r (h d (by simp))]
+    rw [h d (by simp)]
     exact ih (fun x hx => h x (by simp [hx]))
+
+theorem lastPre_zero (d l : List Char) (i : Nat) (acc : Option Nat) :
+    Lex.lastPre d l 0 i acc = if d.isPrefixOf l then some i else acc := by
+  unfold Lex.lastPre; rfl
+
+/-- A line rule cannot start at a character that neither begins its prefix
+nor belongs to the run class. -/
+theorem linePrefixAt_none {cls : Char → Bool} {d : String} {c : Char} (r : List Char)
+    (hc : cls c = false) (hd : d.toList.head?.all (· == c) = false) :
+    Lex.linePrefixAt cls d (c :: r) = none := by
+  have hp := pre_cons_false r hd
+  unfold Lex.pre at hp
+  simp [Lex.linePrefixAt, List.takeWhile, hc, lastPre_zero, hp]
+
+theorem mem_beginOrder_ins (le : Nat × String → Nat × String → Bool) (x y : Nat × String)
+    (l : List (Nat × String)) :
+    x ∈ Lex.beginOrder.ins le y l ↔ x = y ∨ x ∈ l := by
+  induction l with
+  | nil => simp [Lex.beginOrder.ins]
+  | cons z zs ih =>
+    unfold Lex.beginOrder.ins
+    split
+    · simp
+    · simp only [List.mem_cons, ih]; exact or_left_comm
+
+theorem mem_beginOrder {cfg : LexConfig} {x : Nat × String} (h : x ∈ Lex.beginOrder cfg) :
+    (x.1 = 3 ∨ x.1 = 2) → lineOn cfg = true := by
+  have hf : ∀ le (l : List (Nat × String)), x ∈ l.foldr (Lex.beginOrder.ins le) [] → x ∈ l := by
+    intro le l; induction l with
+    | nil => simp
+    | cons y ys ih =>
+      intro hx; rw [List.foldr_cons, mem_beginOrder_ins] at hx; simp only [List.mem_cons]
+      rcases hx with hx | hx
+      · exact Or.inl hx
+      · exact Or.inr (ih hx)
+  unfold Lex.beginOrder at h
+  have hx := hf _ _ h
+  intro hr
+  cases h1 : cfg.lineStatementPrefix <;> cases h2 : cfg.lineCommentPrefix <;>
+    simp only [lineOn, h1, h2, Option.isSome_some, Option.isSome_none, Bool.true_or, Bool.or_true]
+  simp [h1, h2] at hx
+  rcases hx with rfl | rfl | rfl <;> simp at hr
 
 theorem candOne_eq (o : Option Char) (c : Char) : candOne o c = o.all (· == c) := by
   cases o <;> rfl
@@ -108,8 +189,9 @@ theorem isCand_eq (cs : List (Option Char)) (c : Char) :
   | nil => rfl
   | cons o os ih => simp [isCand, ih, candOne_eq]
 
-theorem tagAt_none {cfg : LexConfig} {c : Char} (r : List Char)
-    (h : isCand (cands cfg) c = false) : Lex.tagAt cfg (c :: r) = none := by
+theorem tagAt_none {cfg : LexConfig} {prev : Prev} {c : Char} (r : List Char)
+    (h : isCand (cands cfg) c = false) (hl : (lineOn cfg && prev != .space && isSpace c) = false) :
+    Lex.tagAt cfg prev (c :: r) = none := by
   rw [isCand_eq] at h
   simp only [cands, List.any_eq_false, List.mem_map, List.mem_cons] at h
   have hb : Lex.rawBeginAt cfg (c :: r) = none := by
@@ -121,15 +203,73 @@ theorem tagAt_none {cfg : LexConfig} {c : Char} (r : List Char)
   simp only [Lex.tagAt, hb]
   apply pick_none
   intro x hx
-  have := h _ ⟨x.2, Or.inr ⟨x, hx, rfl⟩, rfl⟩
-  simpa using this
+  have hd : x.2.toList.head?.all (· == c) = false := by
+    have := h _ ⟨x.2, Or.inr ⟨x, hx, rfl⟩, rfl⟩
+    simpa using this
+  have hon := mem_beginOrder hx
+  unfold Lex.ruleAt
+  split
+  · rename_i h3
+    split
+    · rename_i hpv
+      have hc : Lex.isIndent c = false := by
+        have h3' : x.1 = 3 := by simpa using h3
+        have := hon (Or.inl h3')
+        simp only [beq_iff_eq] at hpv
+        subst hpv
+        cases hi : Lex.isIndent c
+        · rfl
+        · have : isSpace c = true := by
+            simp only [Lex.isIndent, Bool.or_eq_true, beq_iff_eq] at hi
+            rcases hi with (rfl | rfl) | rfl <;> decide
+          simp_all
+      rw [linePrefixAt_none r hc hd]; rfl
+    · rfl
+  · split
+    · rename_i _ h2
+      split
+      · rename_i hpv
+        have hc : Lex.isBlank c = false := by
+          have h2' : x.1 = 2 := by simpa using h2
+          have := hon (Or.inr h2')
+          cases hi : Lex.isBlank c
+          · rfl
+          · have : isSpace c = true := by
+              simp only [Lex.isBlank, Bool.and_eq_true] at hi; exact hi.1
+            simp_all
+        rw [linePrefixAt_none r hc hd]; rfl
+      · rfl
+    · rw [pre_cons_false r hd]; rfl
 
-theorem findTag_eq (cfg : LexConfig) (p : s.Pos) (i : Nat) :
-    findTag cfg (cands cfg) p i =
-      match Lex.findTag cfg (rest p) i with
+/-- Without line rules, what precedes a position does not matter. -/
+theorem tagAt_prev_irrel {cfg : LexConfig} (h : lineOn cfg = false) (prev prev' : Prev) (l : List Char) :
+    Lex.tagAt cfg prev l = Lex.tagAt cfg prev' l := by
+  unfold Lex.tagAt
+  split
+  · rfl
+  · have : ∀ ds : List (Nat × String), (∀ x ∈ ds, x ∈ Lex.beginOrder cfg) →
+        Lex.tagAt.pick prev l ds = Lex.tagAt.pick prev' l ds := by
+      intro ds
+      induction ds with
+      | nil => intro _; rfl
+      | cons d ds ih =>
+        intro hm
+        have hd := mem_beginOrder (hm d (by simp))
+        have h3 : d.1 ≠ 3 := fun e => by simp [hd (Or.inl e)] at h
+        have h2 : d.1 ≠ 2 := fun e => by simp [hd (Or.inr e)] at h
+        have hr : Lex.ruleAt prev l d.1 d.2 = Lex.ruleAt prev' l d.1 d.2 := by
+          unfold Lex.ruleAt
+          simp [h3, h2]
+        simp only [Lex.tagAt.pick, hr, ih (fun x hx => hm x (by simp [hx]))]
+    exact this _ (fun x hx => hx)
+
+theorem findTag_eq' (cfg : LexConfig) (prev prev' : Prev) (hpv : lineOn cfg = true → prev' = prev)
+    (p : s.Pos) (i : Nat) :
+    findTag cfg (ctx cfg) prev' p i =
+      match Lex.findTag cfg prev (rest p) i with
       | none => .error (i + (rest p).length)
       | some r => .ok r := by
-  induction h : (rest p).length generalizing p i with
+  induction h : (rest p).length generalizing p i prev prev' with
   | zero =>
     rw [List.length_eq_zero_iff, rest_eq_nil_iff] at h
     subst h; unfold findTag; simp [rest_endPos, Lex.findTag]
@@ -137,21 +277,37 @@ theorem findTag_eq (cfg : LexConfig) (p : s.Pos) (i : Nat) :
     have hp : p ≠ s.endPos := by
       intro he; subst he; simp [rest_endPos] at h
     have hl : (rest (p.next hp)).length = n := by rw [rest_next p hp] at h; simpa using h
+    have hsame : ∀ l, Lex.tagAt cfg prev' l = Lex.tagAt cfg prev l := by
+      intro l
+      cases hlo : lineOn cfg
+      · exact tagAt_prev_irrel hlo _ _ _
+      · rw [hpv hlo]
+    have hnext : lineOn cfg = true →
+        (if (ctx cfg).lc then prevClass (p.get hp) else Prev.text) = prevClass (p.get hp) := by
+      intro hlo; simp [ctx, hlo]
     unfold findTag
     simp only [hp, ↓reduceDIte]
     rw [rest_next p hp]
     simp only [Lex.findTag]
     split
-    · rw [tagAt_eq, rest_next p hp]
-      cases ht : Lex.tagAt cfg (p.get hp :: rest (p.next hp)) with
+    · rw [tagAt_eq, hsame, rest_next p hp]
+      cases ht : Lex.tagAt cfg prev (p.get hp :: rest (p.next hp)) with
       | some t => rfl
       | none =>
-        simp only [ih _ _ hl]
-        cases Lex.findTag cfg (rest (p.next hp)) (i + 1) <;> simp; omega
+        simp only [ih _ _ hnext _ _ hl]
+        cases Lex.findTag cfg (prevClass (p.get hp)) (rest (p.next hp)) (i + 1) <;> simp; omega
     · rename_i hc
-      rw [tagAt_none _ (by simpa using hc)]
-      simp only [ih _ _ hl]
-      cases Lex.findTag cfg (rest (p.next hp)) (i + 1) <;> simp; omega
+      simp only [Bool.or_eq_true, not_or, Bool.not_eq_true] at hc
+      rw [← hsame, tagAt_none _ hc.1 hc.2]
+      simp only [ih _ _ hnext _ _ hl]
+      cases Lex.findTag cfg (prevClass (p.get hp)) (rest (p.next hp)) (i + 1) <;> simp; omega
+
+theorem findTag_eq (cfg : LexConfig) (prev : Prev) (p : s.Pos) (i : Nat) :
+    findTag cfg (ctx cfg) prev p i =
+      match Lex.findTag cfg prev (rest p) i with
+      | none => .error (i + (rest p).length)
+      | some r => .ok r :=
+  findTag_eq' cfg prev prev (fun _ => rfl) p i
 
 theorem findMatch_eq {α : Type} (m : s.Pos → Option α) (M : List Char → Option α)
     (hm : ∀ q, m q = M (rest q)) (p : s.Pos) (i : Nat) :
@@ -289,14 +445,24 @@ theorem fold_len (t : List Char) (n : Nat) : t.foldl lenStep n = n + t.length :=
   | cons c cs ih => simp only [List.foldl_cons, lenStep, ih, List.length_cons]; omega
 
 theorem fold_last (t : List Char) :
-    t.foldl (fun _ c => isNewline c) false = Lex.endsNewline t := by
+    t.foldl (fun _ c => prevClass c) .text = LeanJinja2.prevOf t := by
   induction t using rev_ind with
   | nil => rfl
-  | snoc t c ih => simp [Lex.endsNewline, List.foldl_append]
+  | snoc t c ih => simp [LeanJinja2.prevOf, List.foldl_append]
 
-theorem endsNewline_eq (p : s.Pos) (n : Nat) :
-    endsNewline p n = Lex.endsNewline ((rest p).take n) := by
-  rw [endsNewline, foldTake_eq, fold_last]
+theorem prevOf_eq (p : s.Pos) (n : Nat) :
+    prevOf p n = LeanJinja2.prevOf ((rest p).take n) := by
+  rw [prevOf, foldTake_eq, fold_last]
+
+theorem head_isNone {α : Type} (l : List α) : l.head?.isNone = l.isEmpty := by
+  cases l <;> rfl
+
+theorem lineEndAt_eq (p : s.Pos) : lineEndAt p = Lex.lineEndAt (rest p) := by
+  simp only [lineEndAt, Lex.lineEndAt, peek_eq, rest_advN, head_isNone, spaceLen_eq, foldTake_eq,
+    ← afterLastNewline_eq]
+
+theorem lineRest_eq (p : s.Pos) : lineRest p = Lex.lineRest (rest p) := by
+  simp [lineRest, Lex.lineRest, countWhile_eq]
 
 theorem stripSplit_eq (cfg : LexConfig) (isVar : Bool) (sign : Option Char) (ls : Bool)
     (p : s.Pos) (n : Nat) :
@@ -661,11 +827,11 @@ theorem strValue_eq (cfg : LexConfig) {p : s.Pos} {n : Nat} (h : Lex.stringAt (r
 
 /-! ## Steps -/
 
-theorem stepRoot_rel (cfg : LexConfig) (ls : Bool) (p : s.Pos) (pos : Nat) :
-    RelStep (stepRoot cfg (cands cfg) ls p pos) (Lex.stepRoot cfg ls (rest p) pos) := by
+theorem stepRoot_rel (cfg : LexConfig) (ls : Prev) (p : s.Pos) (pos : Nat) :
+    RelStep (stepRoot cfg (ctx cfg) ls p pos) (Lex.stepRoot cfg ls (rest p) pos) := by
   unfold stepRoot Lex.stepRoot
   rw [findTag_eq]
-  cases Lex.findTag cfg (rest p) 0 with
+  cases Lex.findTag cfg ls (rest p) 0 with
   | none =>
     simp only [Nat.zero_add]
     exact emit_rel (cutData_rel cfg _) _ _
@@ -675,17 +841,21 @@ theorem stepRoot_rel (cfg : LexConfig) (ls : Bool) (p : s.Pos) (pos : Nat) :
     cases t with
     | var n sg => exact emit_rel (by cut_rel_tac) _ _
     | block n sg => exact emit_rel (by cut_rel_tac) _ _
+    | lineStmt n sg => exact emit_rel (by cut_rel_tac) _ _
+    | lineComment n sg =>
+      simp only [lineRest_eq, rest_advN, prevOf_eq]
+      exact emit_rel (by cut_rel_tac) _ _
     | comment n sg =>
       simp only [findMatchC_eq (commentCand cfg.commentEnd.toList.head?) (commentEndAt cfg) (Lex.commentEndAt cfg)
           (commentEndAt_eq cfg) (commentEndAt_cand cfg),
-        rest_advN, endsNewline_eq]
+        rest_advN, prevOf_eq]
       cases Lex.findMatch (Lex.commentEndAt cfg) (List.drop (i + n) (rest p)) 0 with
       | none => rfl
       | some r => exact emit_rel (by cut_rel_tac) _ _
     | raw n sg =>
       simp only [findMatchC_eq (candOne cfg.blockStart.toList.head?) (rawEndAt cfg) (Lex.rawEndAt cfg) (rawEndAt_eq cfg)
           (rawEndAt_cand cfg),
-        rest_advN, endsNewline_eq, stripSplit_eq]
+        rest_advN, prevOf_eq, stripSplit_eq]
       cases Lex.findMatch (Lex.rawEndAt cfg) (List.drop (i + n) (rest p)) 0 with
       | none => rfl
       | some r =>
@@ -696,8 +866,8 @@ theorem stepRoot_rel (cfg : LexConfig) (ls : Bool) (p : s.Pos) (pos : Nat) :
 theorem stepTag_rel (cfg : LexConfig) (k : TagKind) (st : List Char) (ad : Bool) (p : s.Pos)
     (pos : Nat) : RelStep (stepTag cfg k st ad p pos) (Lex.stepTag cfg k st ad (rest p) pos) := by
   unfold stepTag Lex.stepTag
-  simp only [blockEndAt_eq, varEndAt_eq, spaceLen_eq, floatAt_eq, intAt_eq, nameLen_eq, peek_eq,
-    copyTake_eq, takeL_eq, stringAt_eq, opAt_eq, endsNewline_eq, List.headD_eq_head?_getD]
+  simp only [blockEndAt_eq, varEndAt_eq, lineEndAt_eq, spaceLen_eq, floatAt_eq, intAt_eq, nameLen_eq,
+    peek_eq, copyTake_eq, takeL_eq, stringAt_eq, opAt_eq, prevOf_eq, List.headD_eq_head?_getD]
   cases k <;>
   repeat' (first
     | with_reducible refine emit_rel ?_ _ _
@@ -714,8 +884,26 @@ theorem stepTag_rel (cfg : LexConfig) (k : TagKind) (st : List Char) (ad : Bool)
       | exact error_rel _
       | exact emit_rel (cut_rel _ _) _ _
 
+theorem closeLine_rel {x : Except LexError (List TokL × LexMode × s.Pos)}
+    {y : Except LexError (List Token × LexMode × List Char)} (h : RelStep x y) :
+    RelStep (closeLine x) (Lex.closeLine y) := by
+  cases x with
+  | error e => cases y with
+    | error e' => exact h
+    | ok _ => simp [RelStep] at h
+  | ok a => cases y with
+    | error _ => simp [RelStep] at h
+    | ok b =>
+      obtain ⟨ts, m, q⟩ := a
+      obtain ⟨ts', m', r⟩ := b
+      simp only [RelStep] at h
+      obtain ⟨rfl, rfl, hq⟩ := h
+      simp only [closeLine, Lex.closeLine, peek_eq, head_isNone, hq]
+      split <;> simp [RelStep, hq, Token.light]
+
 theorem step_rel (cfg : LexConfig) (m : LexMode) (p : s.Pos) (pos : Nat) :
-    RelStep (step cfg (cands cfg) m p pos) (Lex.step cfg m (rest p) pos) := by
+    RelStep (step cfg (ctx cfg) m p pos) (Lex.step cfg m (rest p) pos) := by
+  apply closeLine_rel
   cases m with
   | root ls => exact stepRoot_rel cfg ls p pos
   | tag k st ad => exact stepTag_rel cfg k st ad p pos
@@ -725,7 +913,7 @@ theorem consumed_light (ts : List Token) : consumed (ts.map Token.light) = Lex.c
 
 theorem loop_eq (cfg : LexConfig) : ∀ (fuel : Nat) (m : LexMode) (p : s.Pos) (pos : Nat)
     (acc : List Token),
-    loop cfg (cands cfg) fuel m p pos (acc.map Token.light) =
+    loop cfg (ctx cfg) fuel m p pos (acc.map Token.light) =
       (Lex.loop cfg fuel m (rest p) pos acc).map (·.map Token.light) := by
   intro fuel
   induction fuel with
@@ -745,7 +933,7 @@ theorem loop_eq (cfg : LexConfig) : ∀ (fuel : Nat) (m : LexMode) (p : s.Pos) (
       obtain ⟨c, cs, hcs⟩ : ∃ c cs, rest p = c :: cs := ⟨_, _, rest_next p hp⟩
       rw [hcs] at hr ⊢
       simp only [Lex.loop]
-      cases hx : step cfg (cands cfg) m p pos with
+      cases hx : step cfg (ctx cfg) m p pos with
       | error e =>
         cases hy : Lex.step cfg m (c :: cs) pos with
         | error e' => rw [hx, hy] at hr; simp only [RelStep] at hr; subst hr; rfl
@@ -796,11 +984,11 @@ theorem lexFast_eq (cfg : LexConfig) (src : String) :
     rw [Cursor.rest_startPos, String.toList_copy_dropEnd]
   have hfuel : (src.toList.take (src.toList.length - k)).length + 1 = src.length - k + 1 := by
     simp only [List.length_take, String.length_toList]; omega
-  have := LexF.loop_eq cfg (src.length - k + 1) (.root true) (src.dropEnd k).startPos 0 []
+  have := LexF.loop_eq cfg (src.length - k + 1) (.root .line) (src.dropEnd k).startPos 0 []
   simp only [List.map_nil] at this
   simp only []
   rw [this, hstart, hfuel]
-  cases Lex.loop cfg (src.length - k + 1) (.root true) (src.toList.take (src.toList.length - k)) 0 [] with
+  cases Lex.loop cfg (src.length - k + 1) (.root .line) (src.toList.take (src.toList.length - k)) 0 [] with
   | error e => rfl
   | ok ts =>
     simp only [Except.map, List.map_append]

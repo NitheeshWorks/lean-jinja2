@@ -51,12 +51,25 @@ theorem stepTag_split {cfg k st ad l pos ts m r} (h : stepTag cfg k st ad l pos 
   dsimp only at h
   repeat' (first | exact emit_split (by splits_tac) h | (cases h; done) | split at h)
 
+theorem closeLine_split {x : Except LexError (List Token × LexMode × List Char)} {l : List Char}
+    (hx : ∀ ts m r, x = .ok (ts, m, r) → Token.printList ts ++ r = l) {ts m r}
+    (h : closeLine x = .ok (ts, m, r)) : Token.printList ts ++ r = l := by
+  unfold closeLine at h
+  split at h
+  · rename_i ts0 m0 r0
+    have := hx ts0 m0 r0 rfl
+    split at h <;> cases h
+    · simpa [Token.printList] using this
+    · exact this
+  · cases h
+
 theorem step_split {cfg m l pos ts m' r} (h : step cfg m l pos = .ok (ts, m', r)) :
     Token.printList ts ++ r = l := by
   unfold step at h
-  split at h
-  · exact stepRoot_split h
-  · exact stepTag_split h
+  refine closeLine_split (fun ts m r hx => ?_) h
+  split at hx
+  · exact stepRoot_split hx
+  · exact stepTag_split hx
 
 theorem loop_print {cfg} : ∀ fuel m l pos acc ts, loop cfg fuel m l pos acc = .ok ts →
     Token.printList ts = Token.printList acc.reverse ++ l

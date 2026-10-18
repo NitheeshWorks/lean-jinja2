@@ -13,6 +13,9 @@ the case exceeded its memory bound (Linux `VmHWM`, reset before each case).
   plain and autoescaped: linear and in place (before the in-place lexer, 6 MB
   took 3.5 s and 830 MB, and 24 MB overflowed the stack);
 * a 10 MB string literal (escapes decoded in place, constant stack);
+* with line statement and line comment prefixes set: 20 MB of plain text,
+  10 MB of commented lines, a 10 MB run of blanks (scanned once, not once
+  per position) and 2 MB of line statements;
 * templates nested `10^4` and `10^5` deep (before the linear rewrite, `10^4`
   nested `if`s took 62 s), and a huge `range`.
 
@@ -24,7 +27,16 @@ workload for profiling.
 
 open LeanJinja2
 
-def rep (k : Nat) (s : String) : String := String.join (List.replicate k s)
+-- Inputs are built when their case runs, not when the program starts (a
+-- hoisted 20 MB constant would count in every case's memory).
+set_option compiler.extract_closed false
+
+def repGo (s : String) : Nat → String → String
+  | 0, acc => acc
+  | k + 1, acc => repGo s k (acc ++ s)
+
+/-- `k` copies of `s`, appended in place (no list of copies). -/
+def rep (k : Nat) (s : String) : String := repGo s k ""
 
 def nestedIf (k : Nat) : String := rep k "{% if true %}" ++ "x" ++ rep k "{% endif %}"
 def unclosedIf (k : Nat) : String := rep k "{% if true %}" ++ "x"
@@ -46,11 +58,27 @@ def line : String := "lorem ipsum dolor sit amet, consectetur adipiscing elit\n"
 /-- About `n` bytes of plain text in lines. -/
 def plain (n : Nat) : String := rep (n / line.length) line
 
+def plainLen (n : Nat) : Nat := n / line.length * line.length
+
 /-- A string literal of about `n` characters. -/
 def strLit (n : Nat) : String := "{{ '" ++ rep (n / 56) "lorem ipsum dolor sit amet, consectetur adipiscing elit" ++ "' }}"
 
 def render (src : String) (vars : List (String × Value) := []) : Unit → Except TemplateError String :=
   fun _ => ({} : Environment).fromString src >>= (·.render vars)
+
+/-- Line statements `#` and line comments `##`. -/
+def lineEnv : Environment := { lineStatementPrefix := some "#", lineCommentPrefix := some "##" }
+
+def renderL (src : String) (vars : List (String × Value) := []) : Unit → Except TemplateError String :=
+  fun _ => lineEnv.fromString src >>= (·.render vars)
+
+def commentLine : String := "lorem ipsum dolor sit amet ## consectetur adipiscing\n"
+
+/-- About `n` bytes of text whose lines end in line comments. -/
+def commented (n : Nat) : String := rep (n / commentLine.length) commentLine
+
+/-- About `n` bytes of line statements. -/
+def lineStmts (n : Nat) : String := rep (n / 20) "# if true\nx\n# endif\n"
 
 def isRecursion : Except TemplateError String → Bool
   | .error .fuelExhausted => true
@@ -79,18 +107,26 @@ def sized (k bound : Nat) : List Bench := [
 /-- Big inputs: time and memory linear in the size. These run first, while
 the process is small. -/
 def big : List Bench := [
-  { name := "plain text 10 MB", run := render (plain 10000000), ok := rendersLen ((plain 10000000).length - 1),
+  { name := "plain text 10 MB", run := render (plain 10000000), ok := rendersLen (plainLen 10000000 - 1),
     boundMs := 1000, boundMB := 200 },
-  { name := "plain text 20 MB", run := render (plain 20000000), ok := rendersLen ((plain 20000000).length - 1),
+  { name := "plain text 20 MB", run := render (plain 20000000), ok := rendersLen (plainLen 20000000 - 1),
     boundMs := 2000, boundMB := 300 },
-  { name := "{{ x }}, x a 20 MB string", run := render "{{ x }}" [("x", .str (plain 20000000))],
-    ok := rendersLen (plain 20000000).length, boundMs := 2000, boundMB := 300 },
+  { name := "{{ x }}, x a 20 MB string", run := fun u => render "{{ x }}" [("x", .str (plain 20000000))] u,
+    ok := rendersLen (plainLen 20000000), boundMs := 2000, boundMB := 300 },
   { name := "{{ x }} autoescaped, x a 20 MB string",
     run := fun _ => ({ autoescape := .const true } : Environment).fromString "{{ x }}" >>=
       (·.render [("x", .str (plain 20000000))]),
-    ok := rendersLen (plain 20000000).length, boundMs := 2000, boundMB := 300 },
+    ok := rendersLen (plainLen 20000000), boundMs := 2000, boundMB := 300 },
   { name := "string literal 10 MB", run := render (strLit 10000000),
-    ok := rendersLen ((strLit 10000000).length - 8), boundMs := 2000, boundMB := 300 } ]
+    ok := rendersLen (10000000 / 56 * 55), boundMs := 2000, boundMB := 300 },
+  { name := "plain text 20 MB, line prefixes set", run := renderL (plain 20000000),
+    ok := rendersLen (plainLen 20000000 - 1), boundMs := 2000, boundMB := 300 },
+  { name := "line comments 10 MB", run := renderL (commented 10000000),
+    ok := rendersLen (10000000 / commentLine.length * 27 - 1), boundMs := 2000, boundMB := 300 },
+  { name := "a 10 MB blank run, line prefixes set", run := renderL ("x" ++ rep 10000000 " " ++ "y"),
+    ok := rendersLen 10000002, boundMs := 2000, boundMB := 300 },
+  { name := "line statements 2 MB", run := renderL (lineStmts 2000000),
+    ok := rendersLen (2000000 / 20 * 2), boundMs := 5000 } ]
 
 def benches : List Bench :=
   big ++ sized 10000 2000 ++ sized 100000 20000 ++ [
@@ -99,10 +135,22 @@ def benches : List Bench :=
   { name := "range(100000) loop", run := render "{% for i in range(100000) %}.{% endfor %}",
     ok := rendersLen 100000, boundMs := 5000 } ]
 
+def resetPeak : IO Unit :=
+  try IO.FS.writeFile "/proc/self/clear_refs" "5" catch _ => pure ()
+
+/-- Peak resident memory in MB since the last reset (Linux `VmHWM`). -/
+def peakMB : IO (Option Nat) := do
+  try
+    let st ← IO.FS.readFile "/proc/self/status"
+    let ln := (st.splitOn "\n").find? (·.startsWith "VmHWM:")
+    pure <| ln.bind fun l => ((l.drop 6).trimAscii.copy.takeWhile Char.isDigit).copy.toNat?.map (· / 1024)
+  catch _ => pure none
+
 /-- `lake exe bench probe <phase> <bytes>`: one workload of about that size,
 for profiling: `lex` (the specification lexer), `lexf` (the in-place one),
 `parse`, `render` (plain text), `tags`, `blocks`, `strlit`, `comment`, `raw`,
-`var`, `varesc`. -/
+`var`, `varesc`, `gen` (the input only), `dcomments`, and with line prefixes
+`lineplain`, `linecomment`, `linestmt`. -/
 def probe (phase : String) (n : Nat) : IO UInt32 := do
   let src := plain n
   let t0 ← IO.monoMsNow
@@ -122,25 +170,23 @@ def probe (phase : String) (n : Nat) : IO UInt32 := do
       | .ok s => s!"{s.length} chars" | .error e => toString e
     | "var" => match render "{{ x }}" [("x", .str src)] () with
       | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "gen" => s!"{src.length} chars"
+    | "linecomment" => match renderL (commented n) [] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "linestmt" => match renderL (lineStmts n) [] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "dcomments" => match render (rep (n / 50) "lorem ipsum dolor sit amet {# consectetur adi #}\n") [] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "lineplain" => match renderL src [] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
     | "varesc" => match (({ autoescape := .const true } : Environment).fromString "{{ x }}" >>=
           (·.render [("x", .str src)])) with
       | .ok s => s!"{s.length} chars" | .error e => toString e
     | _ => match render src [] () with | .ok s => s!"{s.length} chars" | .error e => toString e
-  IO.println s!"{phase} {src.length} bytes: {r} in {(← IO.monoMsNow) - t0} ms"
+  IO.println s!"{phase} {src.length} bytes: {r} in {(← IO.monoMsNow) - t0} ms, peak {(← peakMB).getD 0} MB"
   return 0
 
 /-- Reset the peak resident memory (Linux; does nothing elsewhere). -/
-def resetPeak : IO Unit :=
-  try IO.FS.writeFile "/proc/self/clear_refs" "5" catch _ => pure ()
-
-/-- Peak resident memory in MB since the last reset (Linux `VmHWM`). -/
-def peakMB : IO (Option Nat) := do
-  try
-    let st ← IO.FS.readFile "/proc/self/status"
-    let ln := (st.splitOn "\n").find? (·.startsWith "VmHWM:")
-    pure <| ln.bind fun l => ((l.drop 6).trimAscii.copy.takeWhile Char.isDigit).copy.toNat?.map (· / 1024)
-  catch _ => pure none
-
 def main (args : List String) : IO UInt32 := do
   if let "probe" :: phase :: n :: _ := args then
     return ← probe phase (n.toNat?.getD 1000000)

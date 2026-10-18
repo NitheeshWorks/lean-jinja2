@@ -37,10 +37,10 @@ theorem stream_last_ne_cr {ks : List TokKind} (h : Stream ks) : (Pretty.render k
 theorem lex_pretty (t : List Node) (h : WellFormed t) :
     ∃ ts, lex {} (pretty t) = .ok ts ∧ significant ts = Pretty.nodes t := by
   have hs := nodes_stream t h
-  obtain ⟨ts, m, hrun, hsig⟩ := stream_run hs true
+  obtain ⟨ts, m, hrun, hsig⟩ := stream_run hs .line
   have hcr := stream_last_ne_cr hs
   generalize hcs : Pretty.render (Pretty.nodes t) = cs at hrun hcr
-  have hloop : ∀ fuel, cs.length ≤ fuel → loop dcfg fuel (.root true) cs 0 [] = .ok ts :=
+  have hloop : ∀ fuel, cs.length ≤ fuel → loop dcfg fuel (.root .line) cs 0 [] = .ok ts :=
     fun fuel hf => by simpa using hrun.loop fuel 0 [] hf
   unfold lex lexList pretty
   rw [hcs]

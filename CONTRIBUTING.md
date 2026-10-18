@@ -68,6 +68,14 @@ be a Hoare triple over a heap.
   `l.take k` in the specification, so its twin reads only `k` characters.
   To add a lexer feature, change both and extend the step proofs in
   `Proofs/LexFast.lean`.
+* **Line statements and line comments** are begin rules like the
+  delimiters, ranked in upstream's order (`beginOrder`). Their anchors (`^`,
+  `(?<=\S)`) read the class of the previous character, which `root` mode
+  carries (`Prev`); a line statement is tag mode `line`, ended by
+  `lineEndAt` (upstream's `\s*(\n|$)`) or, at the end of input, by an empty
+  `blockEnd` (`closeLine`). The in-place scan tries a position only when its
+  character starts a delimiter or, with a prefix set, starts a run of
+  whitespace, so text costs the same per character with or without them.
 * **Constant stack.** Every loop over input or output is tail recursive.
   The specification's non-tail `normalizeNewlines` and `unescapeStr` run
   through proved `@[csimp]` replacements (`normalizeNewlines_eq_TR`,
@@ -114,8 +122,11 @@ Each one has a `docs/traceability.toml` row (`deviation` or `excluded`).
 * **Numbers.** Float literals are exact decimals (rationals), not binary
   doubles. Arithmetic on them is exact, so a printed result can differ from
   Python's in the last digits.
-* **Not implemented:** line statements and line comments, the globals `cycler`,
+* **Not implemented:** the globals `cycler`,
   `joiner` and `lipsum`, and the `random` and `urlize` filters.
+* **Line prefixes** must be non-empty (`LexConfig.h_lineNonempty`), as the
+  delimiters must; upstream accepts an empty prefix, which matches at every
+  line.
 * **Autoescape** is `.const b` or `selectAutoescape ...` (the
   `AutoescapePolicy` data type), not an arbitrary callable.
 * **Unicode.** Case mapping (`upper`, `lower`, `title`, `capitalize`) covers

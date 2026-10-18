@@ -699,10 +699,11 @@ def failUnknownOrEof {α : Type} (name : Option String) (stack : TagStack) (ts :
     | none => ""
   fail (first ++ mid ++ last) ts
 
-/-- Prepend template text, merging with a following text node. -/
-def consText (v : String) : List Node → List Node
-  | .text w :: b => .text (v ++ w) :: b
-  | b => if v.isEmpty then b else .text v :: b
+/-- Prepend template text (none when empty). Runs of text split by comments
+or raw blocks stay separate nodes, as upstream's `TemplateData` nodes do;
+merging them here would copy the run once per piece. -/
+def consText (v : String) (b : List Node) : List Node :=
+  if v.isEmpty then b else .text v :: b
 
 /-- Whether a block body is only whitespace text (required blocks). -/
 def onlyWhitespace (body : List Node) : Bool :=

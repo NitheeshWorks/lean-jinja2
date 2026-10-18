@@ -175,10 +175,14 @@ test = ["tests/Conformance.lean"]
 note = "Behaviour of the call protocol is tested against upstream's macro, call-block and regression tests; the parser's argument-order rules are upstream's parse_call_args checks, with a case for each."
 
 [[requirement]]
-id = "deviation.imports"
-upstream = "docs/templates.rst#line-statements"
-title = "line statements and line comments"
-status = "excluded"
+id = "syntax.line-statements"
+upstream = "tests/test_lexnparse.py::TestLexer::test_line_syntax"
+title = "Line statements and line comments (line_statement_prefix, line_comment_prefix), in both lexers"
+status = "implemented"
+realises = ["LeanJinja2.Lex.ruleAt", "LeanJinja2.Lex.lineEndAt", "LeanJinja2.Lex.closeLine", "LeanJinja2.LexF.ruleAt"]
+theorem = ["LeanJinja2.lex_print_roundtrip", "LeanJinja2.lexFast_eq"]
+test = ["tests/Conformance.lean", "tests/Bench.lean"]
+note = "Both theorems hold for every LexConfig, line prefixes included. A prefix must be non-empty (LexConfig.h_lineNonempty); upstream accepts an empty one, which matches at every line."
 
 [[requirement]]
 id = "deviation.globals"

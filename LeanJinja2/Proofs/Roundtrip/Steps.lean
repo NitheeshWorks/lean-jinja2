@@ -178,6 +178,11 @@ theorem takeWhile_append_stop {p : Char → Bool} (xs : List Char) (hx : ∀ c �
 theorem spaceLen_nonspace {c : Char} (h : isSpace c = false) (r : List Char) : spaceLen (c :: r) = 0 := by
   simp [spaceLen, List.takeWhile, h]
 
+/-- A line statement does not end at a non-space character. -/
+theorem lineEndAt_of_spaceLen {l : List Char} (h : spaceLen l = 0) (hl : l ≠ []) : lineEndAt l = none := by
+  have : (l.drop 0).isEmpty = false := by simpa using hl
+  simp [lineEndAt, h, this, afterLastNewline, afterLastNewline.go, hl]
+
 /-- The characters an end-of-tag alternative starts with. -/
 def EndStart (c : Char) : Prop := c = '+' ∨ c = '-' ∨ c = '%' ∨ c = '}'
 
@@ -208,7 +213,7 @@ theorem floatAt_nondig {c : Char} (hc : ¬ IsDig c) (r : List Char) : floatAt (c
 theorem nondig_of_isDigit {c : Char} (h : c.isDigit = false) : ¬ IsDig c := isDigit_false_iff.mp h
 
 /-- The step after a token: the separating space. -/
-theorem ws_step (kd : TagKind) (st : List Char) (ad : Bool) {rest : List Char}
+theorem ws_step (kd : TagKind) (hk : kd ≠ .line) (st : List Char) (ad : Bool) {rest : List Char}
     (hr : ∀ c, rest.head? = some c → isSpace c = false) (pos : Nat) :
     stepTag dcfg kd st ad (' ' :: rest) pos = .ok ([⟨.ws, [' ']⟩], .tag kd st false, rest) := by
   have hend := endAt_none (c := ' ') (by simp [EndStart]) rest
@@ -220,7 +225,7 @@ theorem ws_step (kd : TagKind) (st : List Char) (ad : Bool) {rest : List Char}
       have := hr c rfl
       simp [spaceLen, List.takeWhile, hs, this]
   unfold stepTag
-  cases kd <;> cases st <;> simp [hend.1, hend.2, hsp, emit, cut]
+  cases kd <;> cases st <;> simp_all [hend.1, hend.2, hsp, emit, cut]
 
 theorem name_step {s : String} (hs : IsIdent s) (kd : TagKind) (st : List Char) (rest : List Char) (pos : Nat) :
     stepTag dcfg kd st false (s.toList ++ ' ' :: rest) pos = .ok ([⟨.name s, s.toList⟩], .tag kd st false, ' ' :: rest) := by
@@ -236,7 +241,8 @@ theorem name_step {s : String} (hs : IsIdent s) (kd : TagKind) (st : List Char) 
   have hofl : String.ofList (c :: cs) = s := by rw [← hl, String.ofList_toList]
   rw [hl]
   unfold stepTag
-  cases kd <;> cases st <;> simp [hend.1, hend.2, hsp, floatAt_nondig hnd, intAt_nondig hnd, hname, hc3, emit, cut, hofl]
+  have hle := lineEndAt_of_spaceLen hsp (by simp)
+  cases kd <;> cases st <;> simp [hend.1, hend.2, hsp, hle, floatAt_nondig hnd, intAt_nondig hnd, hname, hc3, emit, cut, hofl]
 
 theorem space_nondig : ¬ IsDig ' ' := by simp [IsDig]
 
@@ -289,7 +295,8 @@ theorem int_step (n : Nat) (kd : TagKind) (st : List Char) (rest : List Char) (p
   rw [hds] at hf hi hlen ⊢
   simp only [List.cons_append] at hf hi hend hsp ⊢
   unfold stepTag
-  cases kd <;> cases st <;> simp [hend.1, hend.2, hsp, hf, hi, emit, cut, hlen]
+  have hle := lineEndAt_of_spaceLen hsp (by simp)
+  cases kd <;> cases st <;> simp [hend.1, hend.2, hsp, hle, hf, hi, emit, cut, hlen]
 
 theorem isDigit_of_dig {c : Char} (h : IsDig c) : c.isDigit = true := by
   cases hc : c.isDigit
@@ -350,10 +357,11 @@ theorem float_step (m sc : Nat) (kd : TagKind) (st : List Char) (rest : List Cha
     rw [hX]; exact spaceLen_nonspace (dig_not_space hdd) _
   have htake : (floatText m sc ++ ' ' :: rest).take (floatText m sc).length = floatText m sc := List.take_left
   have hdrop : (floatText m sc ++ ' ' :: rest).drop (floatText m sc).length = ' ' :: rest := List.drop_left
-  generalize floatText m sc = X at hf hv hend hsp htake hdrop
-  generalize X ++ ' ' :: rest = L at hf hend hsp htake hdrop
+  have hle := lineEndAt_of_spaceLen hsp (by simp)
+  generalize floatText m sc = X at hf hv hend hsp htake hdrop hle
+  generalize X ++ ' ' :: rest = L at hf hend hsp htake hdrop hle
   unfold stepTag
-  cases kd <;> cases st <;> simp [hend.1, hend.2, hsp, hf, emit, cut, htake, hdrop, hv]
+  cases kd <;> cases st <;> simp [hend.1, hend.2, hsp, hle, hf, emit, cut, htake, hdrop, hv]
 
 /-! ## String literals -/
 
@@ -449,9 +457,10 @@ theorem str_step (s : String) (kd : TagKind) (st : List Char) (rest : List Char)
   have hdrop : (strText s ++ ' ' :: rest).drop (strText s).length = ' ' :: rest := List.drop_left
   rw [hX] at hstr htake hdrop ⊢
   simp only [List.append_assoc, List.singleton_append, List.cons_append, List.nil_append] at hend hsp hname hstr htake hdrop ⊢
+  have hle := lineEndAt_of_spaceLen hsp (by simp)
   unfold stepTag
   cases kd <;> cases st <;>
-    simp [hend.1, hend.2, hsp, floatAt_nondig hq, intAt_nondig hq, hname, hstr, htake, hinner, hnorm, hun,
+    simp [hend.1, hend.2, hsp, hle, floatAt_nondig hq, intAt_nondig hq, hname, hstr, htake, hinner, hnorm, hun,
       emit, cut, hdrop, String.ofList_toList, strValue, Except.map]
 
 /-! ## Operators -/
@@ -462,7 +471,7 @@ theorem op_step (o : Op) (kd : TagKind) (st st' : List Char) (hs : stackStep st 
       .ok ([⟨.op o, o.text.toList⟩], .tag kd st' (o == .dot), ' ' :: rest) := by
   cases o <;> cases kd <;> rcases st with _ | ⟨e, st⟩ <;> simp only [stackStep, closerOf, isCloser] at hs <;>
     unfold stepTag <;>
-    simp_all [Op.text, blockEndAt, varEndAt, pre, spaceLen, isSpace, floatAt, digitRun, digitVal, intAt, nameLen,
+    simp_all [Op.text, blockEndAt, varEndAt, lineEndAt, afterLastNewline, afterLastNewline.go, pre, spaceLen, isSpace, floatAt, digitRun, digitVal, intAt, nameLen,
       isIdentChar, stringAt, opAt, closerOf, isCloser, emit, cut]
 
 end LeanJinja2

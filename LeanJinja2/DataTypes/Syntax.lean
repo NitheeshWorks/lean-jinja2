@@ -82,8 +82,8 @@ def significant (ts : List Token) : List TokKind :=
   (ts.filter (fun t => !t.kind.ignored)).map Token.kind
 
 /-- The delimiters and whitespace switches of an environment (upstream
-`Environment(block_start_string=..., trim_blocks=..., ...)`). Line statements
-and line comments are not supported; see `docs/traceability.toml`. -/
+`Environment(block_start_string=..., trim_blocks=..., ...)`), including the
+optional line statement and line comment prefixes. -/
 structure LexConfig where
   blockStart : String := "{%"
   blockEnd : String := "%}"
@@ -99,9 +99,17 @@ structure LexConfig where
   keepTrailingNewline : Bool := false
   /-- The newline sequence template data is normalised to. -/
   newlineSequence : String := "\n"
+  /-- `line_statement_prefix`: a line whose first non-blank text is this
+  prefix is a statement, up to the end of the line. -/
+  lineStatementPrefix : Option String := none
+  /-- `line_comment_prefix`: from this prefix to the end of the line is a
+  comment. -/
+  lineCommentPrefix : Option String := none
   /-- Delimiters are non-empty (an empty delimiter would match everywhere). -/
   h_nonempty : blockStart ≠ "" ∧ blockEnd ≠ "" ∧ variableStart ≠ "" ∧ variableEnd ≠ "" ∧
     commentStart ≠ "" ∧ commentEnd ≠ "" := by decide
+  /-- So are the line prefixes, when set. -/
+  h_lineNonempty : lineStatementPrefix ≠ some "" ∧ lineCommentPrefix ≠ some "" := by decide
 
 instance : Inhabited LexConfig := ⟨{}⟩
 
