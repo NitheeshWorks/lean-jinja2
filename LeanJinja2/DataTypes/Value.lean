@@ -139,6 +139,9 @@ inductive ValueError where
   | assertion (msg : String)
   /-- `TemplateRuntimeError`, `FilterArgumentError`. -/
   | runtime (msg : String)
+  /-- Another Python built-in exception raised by an operation, by class
+  name (`ValueError`, `RuntimeError`, `KeyError`). -/
+  | python (cls : String) (msg : String)
   deriving DecidableEq, Repr, Inhabited, BEq
 
 /-- Errors raised while rendering (upstream exception classes). -/
@@ -157,6 +160,9 @@ inductive RenderError where
   | assertion (msg : String)
   /-- `TemplateRuntimeError`: required block not overridden, unknown test, ... -/
   | runtime (msg : String)
+  /-- Another Python built-in exception raised by an operation, by class
+  name (`ValueError`, `RuntimeError`, `KeyError`). -/
+  | python (cls : String) (msg : String)
   /-- The recursion-depth bound was reached (upstream `RecursionError`). -/
   | fuelExhausted
   deriving DecidableEq, Repr, Inhabited, BEq
@@ -170,6 +176,7 @@ instance : ToString RenderError where
     | .syntax m l => s!"TemplateSyntaxError: {m} (line {l})"
     | .assertion m => s!"TemplateAssertionError: {m}"
     | .runtime m => s!"TemplateRuntimeError: {m}"
+    | .python c m => s!"{c}: {m}"
     | .fuelExhausted => "RecursionError: maximum recursion depth exceeded"
 
 /-- A value error as a render error (same exception class). -/
@@ -179,6 +186,7 @@ def ValueError.toRenderError : ValueError → RenderError
   | .overflow m => .overflow m
   | .assertion m => .assertion m
   | .runtime m => .runtime m
+  | .python c m => .python c m
 
 instance : Coe ValueError RenderError := ⟨ValueError.toRenderError⟩
 

@@ -141,8 +141,11 @@ Each one has a `docs/traceability.toml` row (`deviation` or `excluded`).
 * **Object printing.** A cycler prints as `<jinja2.utils.Cycler object>`,
   without the address upstream's `repr` shows.
 * **`urlize`** decides upstream's regular expressions directly
-  (`RepoImpl/Urlize.lean`), with `\w` as `isIdentChar` and `\d` as an ASCII
-  digit; checked against jinja2 3.1.6 on 8021 generated words. It keeps
+  (`RepoImpl/Urlize.lean`), with CPython's `\w`, `\d` and `\s` from tables
+  `scripts/unicode_tables.py` measures (`RepoImpl/UnicodeTables.lean`). A
+  conformance case runs the 6000 Unicode-heavy words of
+  `tests/golden/urlize_unicode.json` (`scripts/urlize_corpus.py`) against
+  jinja2 3.1.6's output, with no difference. It keeps
   UP-059: a URL whose scheme is not lower case gets `https://` prepended.
   A `trim_url_limit` that is not an integer fails even when no link is made
   (upstream fails only when it trims).

@@ -1,4 +1,5 @@
 import LeanJinja2.RepoImpl.Chars
+import LeanJinja2.RepoImpl.UnicodeTables
 
 /-!
 # `urlize`
@@ -14,15 +15,34 @@ Upstream's regular expressions are decided here directly. Each is anchored
 at both ends, and what may follow the host (`(?::\d{1,5})?(?:[/?#]\S*)?$`)
 starts with a character no host contains, so the host must end at the first
 character outside its alphabet: one candidate split, one linear pass.
-`\w` is `isIdentChar` and `\d` is an ASCII digit (Lean has no Unicode
-tables). Under `re.IGNORECASE` a letter also matches its Unicode case
+`\w`, `\d` and `\s` are CPython's, from the tables `scripts/unicode_tables.py`
+measures (`UnicodeTables`). Under `re.IGNORECASE` a letter also matches its Unicode case
 partners (`ſ` for `s`, `K` for `k`, `İ`/`ı` for `i`), as in Python.
 -/
 
 namespace LeanJinja2
 
-/-- Regex `\w`. -/
-def isWordC (c : Char) : Bool := isIdentChar c
+/-- Membership in sorted, disjoint code point ranges (binary search). -/
+def inRanges (rs : Array (Nat × Nat)) (c : Nat) : Bool :=
+  go 64 0 rs.size
+where
+  go : Nat → Nat → Nat → Bool
+    | 0, _, _ => false
+    | fuel + 1, lo, hi =>
+      if lo < hi then
+        let mid := (lo + hi) / 2
+        let (a, b) := rs.getD mid (0, 0)
+        if c < a then go fuel lo mid else if b < c then go fuel (mid + 1) hi else true
+      else false
+
+/-- Regex `\w` (CPython `re`). -/
+def isWordC (c : Char) : Bool := inRanges UnicodeTables.word c.toNat
+
+/-- Regex `\d` (CPython `re`). -/
+def isReDigit (c : Char) : Bool := inRanges UnicodeTables.digit c.toNat
+
+/-- Regex `\s` (CPython `re`). -/
+def isReSpace (c : Char) : Bool := inRanges UnicodeTables.space c.toNat
 
 /-- `c` matches the pattern letter `t` (ASCII lower case) under `re.IGNORECASE`. -/
 def ciEq (c t : Char) : Bool :=
@@ -34,7 +54,7 @@ def isAzI (c : Char) : Bool :=
   ('a' ≤ c && c ≤ 'z') || ('A' ≤ c && c ≤ 'Z') || c == 'ſ' || c == 'K' || c == 'İ' || c == 'ı'
 
 /-- `[\da-f]` under `re.IGNORECASE`. -/
-def isHexI (c : Char) : Bool := c.isDigit || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')
+def isHexI (c : Char) : Bool := isReDigit c || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')
 
 /-- Strip a case-insensitive literal prefix. -/
 def stripCI : List Char → List Char → Option (List Char)
@@ -46,13 +66,13 @@ def stripCI : List Char → List Char → Option (List Char)
 def urlRestOk : List Char → Bool
   | [] => true
   | ':' :: r =>
-    let ds := r.takeWhile Char.isDigit
-    let r' := r.dropWhile Char.isDigit
+    let ds := r.takeWhile isReDigit
+    let r' := r.dropWhile isReDigit
     1 ≤ ds.length && ds.length ≤ 5 &&
       (match r' with
        | [] => true
-       | c :: s => (c == '/' || c == '?' || c == '#') && s.all (fun c => !isSpace c))
-  | c :: s => (c == '/' || c == '?' || c == '#') && s.all (fun c => !isSpace c)
+       | c :: s => (c == '/' || c == '?' || c == '#') && s.all (fun c => !isReSpace c))
+  | c :: s => (c == '/' || c == '?' || c == '#') && s.all (fun c => !isReSpace c)
 
 /-- `[\w%-]`. -/
 def isHostC (c : Char) : Bool := isWordC c || c == '%' || c == '-'
@@ -109,10 +129,10 @@ def ipv6Ok : List Char → Bool
 
 /-- `(\d{1,3})(\.\d{1,3}){3}` then the rest. -/
 def ipv4Ok (l : List Char) : Bool :=
-  let seg := l.takeWhile (fun c => c.isDigit || c == '.')
+  let seg := l.takeWhile (fun c => isReDigit c || c == '.')
   let ps := seg.splitOn '.'
   ps.length == 4 && ps.all (fun p => 1 ≤ p.length && p.length ≤ 3) &&
-    urlRestOk (l.dropWhile (fun c => c.isDigit || c == '.'))
+    urlRestOk (l.dropWhile (fun c => isReDigit c || c == '.'))
 
 /-- Upstream `_http_re.match(word)`. -/
 def httpMatch (m : List Char) : Bool :=
@@ -132,7 +152,7 @@ def httpMatch (m : List Char) : Bool :=
 def emailMatch (l : List Char) : Bool :=
   let post := (l.reverse.takeWhile (· != '@')).reverse
   let pre := (l.reverse.dropWhile (· != '@')).drop 1
-  !pre.isEmpty && pre.all (fun c => !isSpace c) &&
+  !pre.isEmpty && pre.all (fun c => !isReSpace c) &&
     (match post with
      | c :: _ =>
        isWordC c && post.all (fun c => isWordC c || c == '.' || c == '-') &&
@@ -237,7 +257,7 @@ is kept. `cur` is the current word, reversed. -/
 def urlizeGo (o : UrlizeOpts) : List Char → List Char → String → String
   | [], cur, acc => if cur.isEmpty then acc else acc ++ urlizeWord o cur.reverse
   | c :: r, cur, acc =>
-    if isSpace c then
+    if isReSpace c then
       urlizeGo o r [] ((if cur.isEmpty then acc else acc ++ urlizeWord o cur.reverse).push c)
     else urlizeGo o r (c :: cur) acc
 

@@ -36,7 +36,7 @@ def SplitMix.range (s : UInt64) (a b : Int) : Except ValueError (Int × UInt64) 
   if a < b then
     let (k, s') := SplitMix.below s (b - a).toNat
     .ok (a + k, s')
-  else .error (.typeError s!"empty range in randrange({a}, {b})")
+  else .error (.python "ValueError" s!"empty range in randrange({a}, {b})")
 
 /-- The generator state a heap holds (cell `0`), or the seed. -/
 def rngOf (seed : Nat) (heap : Heap) : UInt64 :=
@@ -59,7 +59,7 @@ def randomChoice (pol : UndefinedPolicy) (heap : Heap) (s : UInt64) (v : Value) 
     match pyItem heap v (.int i) with
     | some x => pure (x, s')
     | none => match v with
-      | .dict _ => .error (.typeError s!"KeyError: {i}")
+      | .dict _ => .error (.python "KeyError" s!"{i}")
       | _ => .error (.typeError s!"'{v.typeName}' object is not subscriptable")
 
 /-- The words of `lipsum` (a Latin vocabulary of our own). -/

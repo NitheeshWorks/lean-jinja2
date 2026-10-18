@@ -516,7 +516,7 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
     | .native "cycler" =>
       match kw, args with
       | (k, _) :: _, _ => throw (.typeError s!"Cycler.__init__() got an unexpected keyword argument '{k}'")
-      | [], [] => throw (.typeError "at least one item has to be provided")
+      | [], [] => throw (.python "RuntimeError" "at least one item has to be provided")
       | [], _ => do
         let h ← get
         set (h ++ [[("items", .tuple args.toArray), ("pos", .int 0)]])

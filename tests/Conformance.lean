@@ -1,4 +1,5 @@
 import LeanJinja2
+import Lean.Data.Json
 
 /-!
 # Conformance cases
@@ -63,6 +64,10 @@ def isUndefined : TemplateError → Bool
   | _ => false
 def isType : TemplateError → Bool
   | .typeError _ => true
+  | _ => false
+/-- A Python built-in exception of class `cls`. -/
+def isPython (cls : String) : TemplateError → Bool
+  | .python c _ => c == cls
   | _ => false
 def isRuntime : TemplateError → Bool
   | .runtime _ => true
@@ -1061,7 +1066,8 @@ def globalCases : List Case := [
   renders (API ++ "test_cycler[loop]")
     "{% set c = cycler('odd', 'even') %}{% for x in [1,2,3] %}<li class={{ c.next() }}>{% endfor %}"
     "<li class=odd><li class=even><li class=odd>",
-  fails (API ++ "test_cycler[empty]") "{{ cycler() }}" (msgHas "at least one item has to be provided"),
+  fails (API ++ "test_cycler[empty]") "{{ cycler() }}"
+    (fun e => isPython "RuntimeError" e && msgHas "at least one item has to be provided" e),
   fails (API ++ "test_cycler[keyword]") "{{ cycler(1, a=2) }}" (msgHas "unexpected keyword argument 'a'"),
   fails (API ++ "test_cycler[next-args]") "{{ cycler(1).next(2) }}" (msgHas "takes 1 positional argument but 2 were given"),
   fails (API ++ "test_cycler[set-attr]") "{% set c = cycler(1) %}{% set c.pos = 3 %}" isRuntime,
@@ -1079,7 +1085,7 @@ def globalCases : List Case := [
   renders (UT ++ "TestLoremIpsum::test_lorem_ipsum_markup")
     "{{ lipsum(1, true, 3, 4).startswith('<p>') }}" "True" (env := { autoescape := .const true }),
   fails (UT ++ "TestLoremIpsum::test_lorem_ipsum_min[empty-range]") "{{ lipsum(1, min=5, max=5) }}"
-    (msgHas "empty range in randrange(5, 5)"),
+    (fun e => isPython "ValueError" e && msgHas "empty range in randrange(5, 5)" e),
   fails (UT ++ "TestLoremIpsum::test_lorem_ipsum_n[type]") "{{ lipsum('a') }}"
     (msgHas "'str' object cannot be interpreted as an integer"),
   fails (UT ++ "TestLoremIpsum::test_lorem_ipsum_n[keyword]") "{{ lipsum(x=1) }}"
@@ -1123,6 +1129,12 @@ def globalCases : List Case := [
     ("a &lt;<a href=\"mailto:b@c.com\">b@c.com</a>&gt; <a href=\"http://x.org/?a=1&amp;b=2\" rel=\"noopener\">" ++
      "http://x.org/?a=1&amp;b=2</a> ((<a href=\"http://x.org\" rel=\"noopener\">http://x.org</a>)))")
     (env := { autoescape := .const true }),
+  renders (F ++ "test_urlize[unicode-word]") "{{ x|urlize }}"
+    ("&lt;<a href=\"https://www.x\u00b2y.com/x\" rel=\"noopener\">www.x\u00b2y.com/x</a>,&gt; " ++
+     "<a href=\"https://www.a\u00bdb.org\" rel=\"noopener\">www.a\u00bdb.org</a> a\u00b7b.com www.e\u0301x.com " ++
+     "<a href=\"mailto:us\u00b7r@x.org\">us\u00b7r@x.org</a> <a href=\"mailto:u\u0301@x.org\">u\u0301@x.org</a> " ++
+     "<a href=\"mailto:x@a\u00bd.com\">x@a\u00bd.com</a> <a href=\"http://\u00b2\u00b3.io\" rel=\"noopener\">http://\u00b2\u00b3.io</a>")
+    [("x", .str "<www.x\u00b2y.com/x,> www.a\u00bdb.org a\u00b7b.com www.e\u0301x.com us\u00b7r@x.org u\u0301@x.org x@a\u00bd.com http://\u00b2\u00b3.io")],
   renders (F ++ "test_urlize[upper-case scheme]") "{{ 'HTTP://EXAMPLE.COM'|urlize }}"
     "<a href=\"https://HTTP://EXAMPLE.COM\" rel=\"noopener\">HTTP://EXAMPLE.COM</a>",
   renders (F ++ "test_urlize[ip]") "{{ 'http://[::1]:80/x https://127.0.0.1:8080 https://300.1.1.1 @a@b'|urlize }}"
@@ -1146,8 +1158,25 @@ def globalCases : List Case := [
     "&lt;a&gt;&amp;|1&lt;br&gt;2" (env := { autoescape := .const true })
 ]
 
+/-- `urlize` on the 6000 Unicode-heavy words of `tests/golden/urlize_unicode.json`
+(`scripts/urlize_corpus.py`), each against jinja2 3.1.6's output. -/
+def urlizeCorpus : Case :=
+  { upstream := F ++ "test_urlize[unicode-corpus]", name := "test_urlize[unicode-corpus]", run := do
+      let j ← IO.ofExcept (Lean.Json.parse (← IO.FS.readFile "tests/golden/urlize_unicode.json"))
+      let arr ← IO.ofExcept j.getArr?
+      let mut bad := 0
+      for c in arr do
+        let x ← IO.ofExcept (c.getObjValAs? String "x")
+        let want ← IO.ofExcept (c.getObjValAs? String "out")
+        match ({} : Environment).fromString "{{ x|urlize }}" >>= (·.render [("x", .str x)]) with
+        | .ok got => if got != want then
+            bad := bad + 1
+            if bad ≤ 3 then IO.println s!"      {repr x}: got {repr got}, expected {repr want}"
+        | .error e => bad := bad + 1; IO.println s!"      {repr x}: error {e}"
+      pure (bad == 0 && arr.size ≥ 5000) }
+
 def cases : List Case := filterCases ++ testCases ++ coreCases ++ lexCases ++ inheritanceCases ++ undefinedCases ++
-  loaderCases ++ importCases ++ macroCases ++ lineCases ++ valueOpCases ++ globalCases
+  loaderCases ++ importCases ++ macroCases ++ lineCases ++ valueOpCases ++ globalCases ++ [urlizeCorpus]
 
 def main : IO UInt32 := do
   let mut failures := 0

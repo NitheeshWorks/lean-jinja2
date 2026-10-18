@@ -311,8 +311,25 @@ def strViewProp : Property where
         gotL == (indexRef xs i).map Value.toStr then (none, r)
     else (some s!"{repr s}[{i}] cell {k}: {got} {again}, want {want}", r)
 
+def randomUniformProp : Property where
+  name := "random is uniform: 3000 draws over 10 items land 300 ± 90 times each"
+  check r :=
+    let (seed, r) := r.nat 1000000
+    let xs : Array Value := (Array.range 10).map (fun (i : Nat) => Value.int (i : Int))
+    let go : Nat → UInt64 → Array Nat → Array Nat := fun k s0 c0 => Id.run do
+      let mut s := s0
+      let mut c := c0
+      for _ in [0:k] do
+        match randomChoice .default [] s (.list xs) with
+        | .ok (.int i, s') => s := s'; c := c.modify i.toNat (· + 1)
+        | _ => pure ()
+      return c
+    let counts := go 3000 (UInt64.ofNat seed) (Array.replicate 10 0)
+    if counts.all (fun n => 210 ≤ n && n ≤ 390) then (none, r)
+    else (some s!"seed {seed}: counts {counts}", r)
+
 def properties : List Property := [renderTotal, printParse, sortProp, uniqueProp, sliceProp, trimProp, wordcountProp,
-  centerProp, lipsumProp, randomProp, strViewProp]
+  centerProp, lipsumProp, randomProp, randomUniformProp, strViewProp]
 
 def main (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 88172645463325252

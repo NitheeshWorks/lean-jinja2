@@ -202,16 +202,16 @@ status = "deviation"
 realises = ["LeanJinja2.randomChoice", "LeanJinja2.lipsum", "LeanJinja2.lipsumCall", "LeanJinja2.SplitMix.next", "LeanJinja2.applyFilterM", "LeanJinja2.Filters.random"]
 theorem = ["LeanJinja2.SplitMix.below_lt"]
 test = ["tests/Props.lean", "tests/Conformance.lean", "tests/Bench.lean"]
-note = "SplitMix64 seeded by Environment.randomSeed, state in heap cell 0; a render is deterministic, upstream's is not. lipsum follows generate_lorem_ipsum's paragraph, comma and full-stop rules with its own Latin words; lipsumProp checks n paragraphs, the word-count bounds of test_lorem_ipsum_min/max, no word twice in a row and the <p> markup. randomProp checks the pick is an item. Inside map('random') items share one draw state. Benches: lipsum(2000) 300 ms, 10^5 |random 700 ms."
+note = "SplitMix64 seeded by Environment.randomSeed, state in heap cell 0; a render is deterministic, upstream's is not. lipsum follows generate_lorem_ipsum's paragraph, comma and full-stop rules with its own Latin words; lipsumProp checks n paragraphs, the word-count bounds of test_lorem_ipsum_min/max, no word twice in a row and the <p> markup. randomProp checks the pick is an item; randomUniformProp that 3000 draws over 10 items land 300 ± 90 times each. An empty randrange raises ValueError and cycler() RuntimeError (ValueError.python), as upstream. Inside map('random') items share one draw state. Benches: lipsum(2000) 300 ms, 10^5 |random 700 ms."
 
 [[requirement]]
 id = "filters.urlize"
 upstream = "tests/test_filters.py::TestFilter::test_urlize"
 title = "urlize: links, mailto and email addresses, rel/target/nofollow, trim_url_limit, extra_schemes and the urlize.* policies"
 status = "tested"
-realises = ["LeanJinja2.Filters.urlize", "LeanJinja2.urlizeText", "LeanJinja2.httpMatch", "LeanJinja2.emailMatch", "LeanJinja2.uriSchemeOk", "LeanJinja2.balance"]
-test = ["tests/Conformance.lean", "tests/Bench.lean"]
-note = "Upstream's regexes are decided directly, one linear pass per word (each is anchored at both ends and the host must end at the first character outside its alphabet). 8021 generated words agreed with jinja2 3.1.6. Keeps UP-059 (an upper-case scheme gets https:// prepended). \\w is isIdentChar and \\d an ASCII digit. Benches: 1 MB of text 500 ms, a 1 MB word 300 ms, 10^5 brackets 200 ms."
+realises = ["LeanJinja2.Filters.urlize", "LeanJinja2.urlizeText", "LeanJinja2.httpMatch", "LeanJinja2.emailMatch", "LeanJinja2.uriSchemeOk", "LeanJinja2.balance", "LeanJinja2.isWordC", "LeanJinja2.UnicodeTables.word"]
+test = ["tests/Conformance.lean", "tests/Bench.lean", "tests/golden/urlize_unicode.json", "scripts/urlize_corpus.py", "scripts/unicode_tables.py"]
+note = "Upstream's regexes are decided directly, one linear pass per word (each is anchored at both ends and the host must end at the first character outside its alphabet). \\w, \\d and \\s are CPython re's, from tables measured by scripts/unicode_tables.py. The conformance case test_urlize[unicode-corpus] checks 6000 Unicode-heavy words (tests/golden/urlize_unicode.json) against jinja2 3.1.6: no difference. Keeps UP-059 (an upper-case scheme gets https:// prepended). Benches: 1 MB of text 500 ms, a 1 MB word 300 ms, 10^5 brackets 200 ms."
 
 [[requirement]]
 id = "filters.groupby-tuple"
