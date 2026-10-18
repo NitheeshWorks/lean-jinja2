@@ -788,7 +788,36 @@ def undefinedCases : List Case :=
     renders "tests/test_api.py::TestExtendedAPI::test_autoescape_autoselect[string]" "{{ foo }}" "<foo>" [("foo", "<foo>")]
       (env := { autoescape := selectAutoescape ["html"] [] false }) ]
 
-def cases : List Case := filterCases ++ testCases ++ coreCases ++ lexCases ++ inheritanceCases ++ undefinedCases
+/-! ## `FileSystemLoader` (tests/test_loader.py::TestFileSystemLoader), over a fixture written here -/
+
+def fsRoot : System.FilePath := ".lake" / "conformance-fs" / "templates"
+
+def writeFixture : IO Unit := do
+  IO.FS.createDirAll (fsRoot / "foo")
+  IO.FS.writeFile (fsRoot / "test.html") "BAR\n"
+  IO.FS.writeFile (fsRoot / "foo" / "test.html") "FOO\n"
+
+/-- The upstream `_test_common`: `test.html`, `foo/test.html`, a missing name. -/
+def fsCommon (upstream : String) (mk : IO Loader) : Case :=
+  { upstream, name := upstream.splitOn "::" |>.getLast!, run := do
+      writeFixture
+      let env : Environment := { loader := ← mk }
+      let r1 := env.getTemplate "test.html" >>= (·.render)
+      let r2 := env.getTemplate "foo/test.html" >>= (·.render)
+      let r3 := env.getTemplate "missing.html"
+      let ok3 := match r3 with | .error (.notFound _) => true | _ => false
+      match r1, r2 with
+      | .ok a, .ok b => pure (a.trimAscii.toString == "BAR" && b.trimAscii.toString == "FOO" && ok3)
+      | _, _ => pure false }
+
+def loaderCases : List Case := [
+  fsCommon "tests/test_loader.py::TestFileSystemLoader::test_searchpath_as_str" (FileSystemLoader fsRoot.toString),
+  fsCommon "tests/test_loader.py::TestFileSystemLoader::test_searchpath_as_pathlib" (FileSystemLoader fsRoot),
+  fsCommon "tests/test_loader.py::TestFileSystemLoader::test_searchpath_as_list_including_pathlib"
+    (FileSystemLoader ["/tmp/lean-jinja2-no-such-dir/templates", fsRoot.toString]) ]
+
+def cases : List Case := filterCases ++ testCases ++ coreCases ++ lexCases ++ inheritanceCases ++ undefinedCases ++
+  loaderCases
 
 def main : IO UInt32 := do
   let mut failures := 0
