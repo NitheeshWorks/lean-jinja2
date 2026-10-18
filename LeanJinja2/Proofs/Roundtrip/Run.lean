@@ -30,19 +30,19 @@ theorem Run.one {m l ts m1 r1} (hs : ∀ pos, Lex.step dcfg m l pos = .ok (ts, m
   simpa using Run.cons hs hl (Run.refl m1 r1)
 
 theorem Run.loop {m l ts m'} (h : Run m l ts m' []) :
-    ∀ fuel pos, l.length ≤ fuel → loop dcfg fuel m l pos = .ok ts := by
+    ∀ fuel pos acc, l.length ≤ fuel → loop dcfg fuel m l pos acc = .ok (acc.reverse ++ ts) := by
   generalize hr : ([] : List Char) = r at h
   induction h with
-  | refl m l => intro fuel pos _; subst hr; cases fuel <;> rfl
+  | refl m l => intro fuel pos acc _; subst hr; cases fuel <;> simp [Lex.loop]
   | @cons m l ts m1 r1 us m2 r2 hs hl _ ih =>
-    intro fuel pos hf
+    intro fuel pos acc hf
     obtain ⟨c, cs, rfl⟩ : ∃ c cs, l = c :: cs := by
       cases l with
       | nil => simp at hl
       | cons c cs => exact ⟨c, cs, rfl⟩
     obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by simp at hf; omega⟩
-    have := ih hr f (pos + ((c :: cs).length - r1.length)) (by simp at hl hf; omega)
-    simp only [List.length_cons] at this
+    have := ih hr f (pos + consumed ts) (ts.reverse ++ acc) (by simp at hl hf; omega)
+    simp only [List.reverse_append, List.reverse_reverse, List.append_assoc] at this
     simp [Lex.loop, hs pos, this]
 
 /-- Input that does not start with whitespace. -/

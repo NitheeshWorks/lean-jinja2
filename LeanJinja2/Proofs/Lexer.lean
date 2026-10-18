@@ -58,22 +58,19 @@ theorem step_split {cfg m l pos ts m' r} (h : step cfg m l pos = .ok (ts, m', r)
   · exact stepRoot_split h
   · exact stepTag_split h
 
-theorem loop_print {cfg} : ∀ fuel m l pos ts, loop cfg fuel m l pos = .ok ts → Token.printList ts = l
-  | _, _, [], _, ts, h => by simp [loop] at h; subst h; rfl
-  | 0, _, _ :: _, _, _, h => by simp [loop] at h
-  | fuel + 1, m, c :: cs, pos, ts, h => by
+theorem loop_print {cfg} : ∀ fuel m l pos acc ts, loop cfg fuel m l pos acc = .ok ts →
+    Token.printList ts = Token.printList acc.reverse ++ l
+  | _, _, [], _, acc, ts, h => by simp [loop] at h; subst h; simp
+  | 0, _, _ :: _, _, _, _, h => by simp [loop] at h
+  | fuel + 1, m, c :: cs, pos, acc, ts, h => by
     simp only [loop] at h
     split at h
     · cases h
     · rename_i ts1 m' r hs
-      split at h
-      · cases h
-      · rename_i us hl
-        cases h
-        have h1 := step_split hs
-        have h2 := loop_print fuel m' r _ us hl
-        simp only [Token.printList, List.flatMap_append] at h1 h2 ⊢
-        rw [h2]; exact h1
+      have h1 := step_split hs
+      have h2 := loop_print fuel m' r _ _ ts h
+      simp only [Token.printList, List.reverse_append, List.reverse_reverse, List.flatMap_append] at h1 h2 ⊢
+      rw [h2, List.append_assoc, h1]
 
 theorem lexList_print {cfg l ts} (h : lexList cfg l = .ok ts) : Token.printList ts = l := by
   unfold lexList at h
@@ -82,7 +79,7 @@ theorem lexList_print {cfg l ts} (h : lexList cfg l = .ok ts) : Token.printList 
   · cases h
   · rename_i us hl
     cases h
-    have := loop_print _ _ _ _ _ hl
+    have := loop_print _ _ _ _ _ _ hl
     simp only [Token.printList, List.flatMap_append] at this ⊢
     rw [this]
     split

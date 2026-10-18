@@ -19,6 +19,11 @@
     name = "conformance"
     root = "tests.Conformance"
 
+# Time bounds on hostile templates (deep nesting, big ranges): `lake exe bench`.
+[[lean_exe]]
+name = "bench"
+root = "tests.Bench"
+
 [[require]]
 name = "LeanMarkupsafe"
 git = "https://github.com/NitheeshWorks/lean-markupsafe"

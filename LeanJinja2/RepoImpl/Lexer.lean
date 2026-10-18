@@ -489,18 +489,19 @@ def step (cfg : LexConfig) (m : LexMode) (l : List Char) (pos : Nat) :
   | .root ls => stepRoot cfg ls l pos
   | .tag k st ad => stepTag cfg k st ad l pos
 
+/-- How many characters a step's tokens cover. -/
+def consumed (ts : List Token) : Nat := ts.foldl (fun n t => n + t.raw.length) 0
+
 /-- The lexer loop: `fuel` bounds the number of steps (the input length
-suffices, every step consumes a character). -/
-def loop (cfg : LexConfig) : Nat → LexMode → List Char → Nat → Except LexError (List Token)
-  | _, _, [], _ => .ok []
-  | 0, _, _ :: _, pos => .error ⟨"lexer step bound exceeded", pos⟩
-  | fuel + 1, m, l@(_ :: _), pos =>
+suffices, every step consumes a character). Tail recursive, with the tokens
+so far in reverse in `acc`, so it runs in constant stack and linear time. -/
+def loop (cfg : LexConfig) : Nat → LexMode → List Char → Nat → List Token → Except LexError (List Token)
+  | _, _, [], _, acc => .ok acc.reverse
+  | 0, _, _ :: _, pos, _ => .error ⟨"lexer step bound exceeded", pos⟩
+  | fuel + 1, m, l@(_ :: _), pos, acc =>
     match step cfg m l pos with
     | .error e => .error e
-    | .ok (ts, m', r) =>
-      match loop cfg fuel m' r (pos + (l.length - r.length)) with
-      | .error e => .error e
-      | .ok us => .ok (ts ++ us)
+    | .ok (ts, m', r) => loop cfg fuel m' r (pos + consumed ts) (ts.reverse ++ acc)
 
 /-- The trailing newline upstream strips from the source (unless
 `keep_trailing_newline`): its length. -/
@@ -518,7 +519,7 @@ end Lex
 def lexList (cfg : LexConfig) (l : List Char) : Except LexError (List Token) :=
   let k := Lex.trailingNewlineLen cfg l
   let body := l.take (l.length - k)
-  match Lex.loop cfg (body.length + 1) (.root true) body 0 with
+  match Lex.loop cfg (body.length + 1) (.root true) body 0 [] with
   | .error e => .error e
   | .ok ts => .ok (ts ++ (if k = 0 then [] else [⟨.ws, l.drop (l.length - k)⟩]))
 

@@ -39,8 +39,8 @@ theorem lex_pretty (t : List Node) (h : WellFormed t) :
   obtain ⟨ts, m, hrun, hsig⟩ := stream_run hs true
   have hcr := stream_last_ne_cr hs
   generalize hcs : Pretty.render (Pretty.nodes t) = cs at hrun hcr
-  have hloop : ∀ fuel, cs.length ≤ fuel → loop dcfg fuel (.root true) cs 0 = .ok ts :=
-    fun fuel hf => hrun.loop fuel 0 hf
+  have hloop : ∀ fuel, cs.length ≤ fuel → loop dcfg fuel (.root true) cs 0 [] = .ok ts :=
+    fun fuel hf => by simpa using hrun.loop fuel 0 [] hf
   unfold lex lexList pretty
   rw [hcs]
   by_cases hnl : cs.getLast? = some '\n'
