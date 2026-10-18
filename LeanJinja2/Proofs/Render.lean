@@ -13,6 +13,8 @@ interpolated piece carries the escape flag. `render_literals` and
 
 namespace LeanJinja2
 
+set_option linter.unusedSimpArgs false
+
 open LeanMarkupsafe
 
 section Invariant

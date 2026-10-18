@@ -14,4 +14,6 @@ than being dropped, so this file stays an honest map of what is verified.
 
 namespace LeanJinja2
 
+set_option linter.unusedSimpArgs false
+
 end LeanJinja2

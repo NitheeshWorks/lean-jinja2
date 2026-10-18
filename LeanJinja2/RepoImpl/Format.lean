@@ -242,10 +242,10 @@ where
 
 /-- Upstream `htmlsafe_json_dumps`: `<`, `>`, `&`, `'` become `\u` escapes,
 and the result is marked safe. -/
-def htmlsafeJson (s : String) : String :=
-  String.join (s.toList.map fun c =>
-    match c with
-    | '<' => "\\u003c" | '>' => "\\u003e" | '&' => "\\u0026" | '\'' => "\\u0027"
-    | c => String.singleton c)
+def htmlsafeChar : Char → String
+  | '<' => "\\u003c" | '>' => "\\u003e" | '&' => "\\u0026" | '\'' => "\\u0027"
+  | c => String.singleton c
+
+def htmlsafeJson (s : String) : String := String.join (s.toList.map htmlsafeChar)
 
 end LeanJinja2

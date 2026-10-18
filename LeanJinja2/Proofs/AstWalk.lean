@@ -9,6 +9,8 @@ node's own: one lemma, used by every case of the renderer proofs.
 
 namespace LeanJinja2
 
+set_option linter.unusedSimpArgs false
+
 /-- The nodes directly nested in a node: every body it holds. -/
 def Node.children : Node → List Node
   | .if_ bs els => bs.flatMap (·.2) ++ els

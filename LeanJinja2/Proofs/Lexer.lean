@@ -1,6 +1,8 @@
 import LeanJinja2.RepoImpl.Lexer
 
 namespace LeanJinja2
+
+set_option linter.unusedSimpArgs false
 namespace Lex
 
 /-- A cutter splits its input: the emitted tokens print to a prefix, the

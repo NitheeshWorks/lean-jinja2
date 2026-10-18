@@ -10,6 +10,8 @@ preserved an invariant because every step did.
 
 namespace LeanJinja2
 
+set_option linter.unusedSimpArgs false
+
 theorem Except.bind_eq_ok_iff {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {b : β} :
     x.bind f = .ok b ↔ ∃ a, x = .ok a ∧ f a = .ok b := by
   cases x <;> simp [Except.bind]
