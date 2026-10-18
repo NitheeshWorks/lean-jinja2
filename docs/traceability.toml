@@ -16,11 +16,166 @@ upstream_url = "https://github.com/pallets/jinja"
 upstream_commit = "5ef70112a1ff19c05324ff889dd30405b1002044"
 upstream_license = "BSD-3-Clause"
 
-# [[requirement]]
-# id = "..."                  # stable id, e.g. "routing.first-match"
-# upstream = "tests/test_x.py::test_y"   # or a docs section
-# title = "..."
-# status = "implemented"
-# realises = ["LeanJinja2.Foo.bar"]
-# theorem = ["LeanJinja2.Foo.bar_spec"]
-# test = ["tests/Conformance.lean::name"]
+[[requirement]]
+id = "lexer.roundtrip"
+upstream = "tests/test_lexnparse.py::TestLexer"
+title = "Lexing loses nothing: tokens print back to the source"
+status = "implemented"
+realises = ["LeanJinja2.lex", "LeanJinja2.API.lex"]
+theorem = ["LeanJinja2.lex_print_roundtrip"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "parser.roundtrip"
+upstream = "tests/test_lexnparse.py::TestParser"
+title = "Parsing the canonical print of a well-formed template returns it"
+status = "implemented"
+realises = ["LeanJinja2.parse", "LeanJinja2.pretty", "LeanJinja2.API.pretty"]
+theorem = ["LeanJinja2.parse_pretty_roundtrip"]
+test = ["tests/Conformance.lean", "tests/Props.lean"]
+
+[[requirement]]
+id = "syntax.whitespace"
+upstream = "tests/test_lexnparse.py::TestTrimBlocks"
+title = "trim_blocks, lstrip_blocks and the -/+ whitespace modifiers"
+status = "implemented"
+realises = ["LeanJinja2.lex"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "render.autoescape"
+upstream = "docs/api.rst#autoescaping"
+title = "With autoescaping on throughout, every interpolated value is escaped"
+status = "implemented"
+realises = ["LeanJinja2.Template.render", "LeanJinja2.API.render"]
+theorem = ["LeanJinja2.autoescape_sound", "LeanJinja2.autoescape_escaped", "LeanJinja2.render_literals"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "render.markup"
+upstream = "docs/templates.rst#working-with-automatic-escaping"
+title = "Markup values pass through unescaped"
+status = "implemented"
+realises = ["LeanJinja2.Template.render"]
+theorem = ["LeanJinja2.markup_passthrough"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "render.total"
+upstream = "docs/api.rst#jinja2.Template.render"
+title = "Rendering terminates and the depth budget suffices"
+status = "tested"
+realises = ["LeanJinja2.Template.render"]
+test = ["tests/Props.lean"]
+note = "The renderer is total by construction (no partial). That the default maxDepth never runs out on a template without runaway recursion would need a per-filter fuel argument; it is tested by the render_total property instead."
+
+[[requirement]]
+id = "tags.for"
+upstream = "tests/test_core_tags.py::TestForLoop"
+title = "for loops and the loop variable"
+status = "implemented"
+realises = ["LeanJinja2.renderNode"]
+theorem = ["LeanJinja2.for_loop_vars"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "tags.if-set-with-macro"
+upstream = "tests/test_core_tags.py::TestMacros"
+title = "if, set, with, macro, call and filter blocks"
+status = "implemented"
+realises = ["LeanJinja2.renderNode"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "undefined.policy"
+upstream = "tests/test_api.py::TestUndefined"
+title = "Undefined, StrictUndefined, ChainableUndefined, DebugUndefined"
+status = "implemented"
+realises = ["LeanJinja2.renderNode"]
+theorem = ["LeanJinja2.undefined_policy", "LeanJinja2.undefined_getattr"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "inheritance.blocks"
+upstream = "tests/test_inheritance.py::TestInheritance"
+title = "extends renders the most-derived block body"
+status = "implemented"
+realises = ["LeanJinja2.renderNode"]
+theorem = ["LeanJinja2.extends_block_override"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "filters.laws"
+upstream = "tests/test_filters.py::TestFilter"
+title = "Defining equations of upper, lower, length, default, escape, safe, first, last, list, reverse, join"
+status = "implemented"
+realises = ["LeanJinja2.applyFilter"]
+theorem = ["LeanJinja2.filter_upper", "LeanJinja2.filter_lower", "LeanJinja2.filter_length", "LeanJinja2.filter_default_undefined", "LeanJinja2.filter_default_defined", "LeanJinja2.filter_escape", "LeanJinja2.filter_escape_markup", "LeanJinja2.filter_safe", "LeanJinja2.filter_first", "LeanJinja2.filter_last", "LeanJinja2.filter_list", "LeanJinja2.filter_reverse", "LeanJinja2.filter_join"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "filters.tojson"
+upstream = "tests/test_filters.py::TestFilter::test_json_dump"
+title = "tojson output is HTML-safe"
+status = "implemented"
+realises = ["LeanJinja2.applyFilter"]
+theorem = ["LeanJinja2.filter_tojson_htmlsafe"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "filters.tested"
+upstream = "tests/test_filters.py::TestFilter"
+title = "sort, unique, trim, wordcount, center"
+status = "tested"
+realises = ["LeanJinja2.applyFilter"]
+test = ["tests/Conformance.lean", "tests/Props.lean"]
+note = "Their specifications (sorted permutation, first-occurrence dedup, whitespace) are checked by property tests; proofs would add little over the equations they are written as."
+
+[[requirement]]
+id = "tests.builtin"
+upstream = "tests/test_tests.py::TestTestsCase"
+title = "Builtin tests (defined, odd, divisibleby, ...)"
+status = "implemented"
+realises = ["LeanJinja2.renderNode"]
+theorem = ["LeanJinja2.test_defined"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "loader.filesystem"
+upstream = "tests/test_loader.py::TestFileSystemLoader"
+title = "FileSystemLoader over a str, a path, or a list"
+status = "implemented"
+realises = ["LeanJinja2.FileSystemLoader", "LeanJinja2.Environment.getTemplate"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "deviation.floats"
+upstream = "docs/templates.rst#literals"
+title = "Float literals are exact decimals, not binary doubles"
+status = "deviation"
+note = "Arithmetic on float literals is exact; repr of results can differ from Python's binary floats."
+
+[[requirement]]
+id = "deviation.imports"
+upstream = "docs/templates.rst#import"
+title = "import / from ... import, *args/**kwargs in macros, line statements"
+status = "excluded"
+
+[[requirement]]
+id = "deviation.globals"
+upstream = "docs/templates.rst#list-of-global-functions"
+title = "cycler, joiner, lipsum, random, urlize"
+status = "excluded"
+
+[[requirement]]
+id = "deviation.autoescape-callable"
+upstream = "docs/api.rst#autoescaping"
+title = "autoescape is a constant or select_autoescape, not an arbitrary callable"
+status = "deviation"
+note = "Upstream accepts any callable; here it is the AutoescapePolicy data type."
+
+[[requirement]]
+id = "deviation.unicode"
+upstream = "docs/templates.rst#filters"
+title = "Case mapping is ASCII/Latin-1; identifiers approximate Python's unicode rule; no \\N{...} escapes"
+status = "deviation"

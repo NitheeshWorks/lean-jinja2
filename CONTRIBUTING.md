@@ -17,9 +17,10 @@ to bytes:
 | `Specifications/` | the properties, in `Prop` | the contract |
 | `Proofs/` | theorems; `Proofs/Verified.lean` bundles one `Verified<Layer>` per layer | yes |
 | `APIs/` | the public surface, returning refinements | by construction |
-| `Transport.lean` (if present) | the only effectful module | no; tested |
+| `Loader.lean` | the only effectful module: `FileSystemLoader` reads a search path into the pure `Loader` | no; tested |
 
-Everything except the transport module is a pure function. This is
+Everything except `Loader.lean` is a pure function: a file system loader
+reads its directory once, up front, and the environment holds the result. This is
 load-bearing: a round-trip property of a function is an equation that
 `omega` and `simp` attack directly; the same property of a procedure would
 be a Hoare triple over a heap.
@@ -32,9 +33,12 @@ be a Hoare triple over a heap.
   trip or a membership, as `{r // Post r}` or `Except Err {r // Post r}`.
 * **Refinement types are subtypes with `Decidable` predicates**, so the same
   predicate is checked at runtime (`if h : P x`) and used in proofs.
-* **Totality.** No `partial def` or `unsafe` under `LeanJinja2/`. Byte parsers recurse
-  on a `Nat` fuel equal to the remaining input, with a progress lemma per
-  production.
+* **Totality.** No `partial def` or `unsafe` under `LeanJinja2/`. The lexer
+  recurses on the remaining input. The parser takes fuel `parse.fuelFor ts =
+  40 * (ts.length + 2)`, and `Proofs/Parser/` shows that this is always enough
+  for the canonical print of a well-formed template, because fuel is monotone
+  (`Reads`) and a node of size `n` needs at most `40 n + 40`. The renderer
+  takes `Environment.maxDepth` (default 1000) as its recursion budget.
 * **`_ext` lemmas.** A decoder lemma holds on any continuation of the buffer and
   reports the final position, so field lemmas compose. Do not add a lemma that
   only holds at the end of a buffer; it is unusable one field later.
@@ -48,7 +52,45 @@ be a Hoare triple over a heap.
 ### Tested, not proved
 
 Listed here with the reason, and in `docs/traceability.toml` with
-`status = "tested"`. (Nothing yet.)
+`status = "tested"`.
+
+* **`render_total`**: rendering terminates, and the default `maxDepth` is
+  enough for any template without runaway recursion. Termination holds by
+  construction, since there is no `partial`. Proving that the budget suffices
+  would need a fuel argument for each of the 52 builtin filters. Instead,
+  `tests/Props.lean` (`renderTotal`) renders generated templates with nested
+  `if`, `for`, `with`, filter blocks and autoescape blocks, and checks that
+  none returns `fuelExhausted`. `Proofs/Verified.lean` has no slot for it.
+* **`sort`, `unique`, `trim`, `wordcount`, `center`** are covered by property
+  tests and by the upstream cases in `tests/Conformance.lean`. The properties
+  are: a sorted permutation, first occurrences in order, no surrounding
+  whitespace, the word count, and the text centred in the width. The other
+  filters without an equation in `Proofs/Filters.lean` are covered by
+  conformance cases only.
+* **`parse_pretty_roundtrip`** is proved. `printParse` in `tests/Props.lean`
+  is an executable cross-check of the same statement on generated templates.
+
+### Deviations from upstream
+
+Each one has a `docs/traceability.toml` row (`deviation` or `excluded`).
+
+* **Numbers.** Float literals are exact decimals (rationals), not binary
+  doubles. Arithmetic on them is exact, so a printed result can differ from
+  Python's in the last digits.
+* **Not implemented:** `import` and `from ... import`, macro `*varargs` and
+  `**kwargs`, line statements and line comments, the globals `cycler`,
+  `joiner` and `lipsum`, and the `random` and `urlize` filters.
+* **Autoescape** is `.const b` or `selectAutoescape ...` (the
+  `AutoescapePolicy` data type), not an arbitrary callable.
+* **Unicode.** Case mapping (`upper`, `lower`, `title`, `capitalize`) covers
+  ASCII and Latin-1. Identifiers approximate Python's `str.isidentifier`: they
+  accept alphanumerics, `_`, and non-ASCII characters outside the whitespace
+  and symbol ranges. String literals reject `\N{...}` escapes.
+* **Unknown escapes** (UP-047). `'\q'` and `'\é'` both keep the backslash.
+  Upstream keeps it before an ASCII character but turns `'\é'` into the text
+  `\xe9`.
+* **`title` on markup** (UP-048) follows upstream: the result is a plain
+  string, so it is escaped again under autoescape.
 
 ## Tests
 
