@@ -1,0 +1,833 @@
+import LeanJinja2.RepoImpl.Format
+
+/-!
+# Builtin filters and tests
+
+Upstream `jinja2.filters.FILTERS` and `jinja2.tests.TESTS`, as total
+functions of the value and the arguments. `FCtx` carries what upstream reads
+from the environment and evaluation context: the autoescape flag, the
+undefined policy, the namespace heap, `truncate.leeway`, and the host's
+custom filters and tests.
+
+Not provided: `random` (nondeterministic), `urlize`, `wordwrap`'s hyphen
+rules; see `docs/traceability.toml`.
+-/
+
+namespace LeanJinja2
+
+open LeanMarkupsafe
+
+/-- What filters and tests read from the environment. -/
+structure FCtx where
+  autoescape : Bool := false
+  pol : UndefinedPolicy := .default
+  heap : Heap := []
+  leeway : Nat := 5
+  filters : List (String × NativeFn) := []
+  tests : List (String × NativeFn) := []
+  vars : List (String × Value) := []
+
+instance : Inhabited FCtx := ⟨{}⟩
+
+/-- Positional argument `i` or keyword `name`. -/
+def argAt (args : List Value) (kwargs : List (String × Value)) (i : Nat) (name : String) :
+    Option Value :=
+  match args[i]? with
+  | some v => some v
+  | none => kwargs.lookup name
+
+def Value.asInt? : Value → Option Int
+  | .int i => some i
+  | .bool b => some (if b then 1 else 0)
+  | _ => Option.none
+
+def typeErr {α : Type} (msg : String) : Except RenderError α := .error (.typeError msg)
+
+/-- An integer argument, or a `TypeError`. -/
+def intArg (v : Value) (what : String) : Except RenderError Int :=
+  match v.asInt? with
+  | some i => .ok i
+  | none => typeErr s!"{what} must be an integer, not {v.typeName}"
+
+/-- Upstream `ignore_case`: strings are lowered, other values unchanged. -/
+def ignoreCase : Value → Value
+  | .str s => .str (strLower s)
+  | .markup m => .markup ⟨strLower m.str⟩
+  | v => v
+
+/-- Upstream `_prepare_attribute_parts`. -/
+def attrParts : Value → List Value
+  | .none => []
+  | .str s => (s.splitOn ".").map fun p =>
+      if !p.isEmpty && p.toList.all Char.isDigit then .int (digitsValue 10 p.toList) else .str p
+  | v => [v]
+
+/-- Upstream `make_attrgetter(attribute, default=default)`. -/
+def attrGet (fc : FCtx) (attr : Value) (default : Option Value) (item : Value) :
+    Except RenderError Value :=
+  (attrParts attr).foldlM (fun it part => do
+    let r ← getitemV fc.pol fc.heap it part
+    match default, r with
+    | some d, .undef _ => pure d
+    | _, _ => pure r) item
+
+/-- A stable insertion sort with a fallible order. -/
+def sortBy {α : Type} (le : α → α → Except RenderError Bool) (xs : List α) :
+    Except RenderError (List α) :=
+  let rec ins (x : α) : List α → Except RenderError (List α)
+    | [] => .ok [x]
+    | y :: ys => do
+      if ← le y x then do let r ← ins x ys; pure (y :: r) else pure (x :: y :: ys)
+  xs.foldlM (fun acc x => ins x acc) []
+
+/-- `a ≤ b` in Python's order. -/
+def pyLe (a b : Value) : Except RenderError Bool :=
+  match Value.pyCmp a b with
+  | .ok o => .ok (o != .gt)
+  | .error m => typeErr m
+
+/-- Python `str.strip(chars)`. -/
+def stripChars (chars : Option (List Char)) (l : List Char) : List Char :=
+  match chars with
+  | none => stripList l
+  | some cs => ((l.dropWhile (cs.contains ·)).reverse.dropWhile (cs.contains ·)).reverse
+
+/-- Wrap a text result as markup when the input was markup (MarkupSafe's
+string methods return `Markup`). -/
+def keepKind (v : Value) (s : String) : Value :=
+  match v with
+  | .markup _ => .markup (Markup.markSafe s)
+  | _ => .str s
+
+/-- Python `str.title` as upstream's `do_title` computes it: words begin after
+runs of `-`, whitespace, `(`, `{`, `[`, `<`. -/
+def titleList (l : List Char) : List Char :=
+  let isSep := fun (c : Char) => c == '-' || isSpace c || c == '(' || c == '{' || c == '[' || c == '<'
+  let rec go : List Char → Bool → List Char
+    | [], _ => []
+    | c :: cs, start =>
+      if isSep c then c :: go cs true
+      else (if start then charUpper c else charLower c) :: go cs false
+  go l true
+
+/-- `\w+` word count. -/
+def wordCount (l : List Char) : Nat :=
+  let isW := fun (c : Char) => c.isAlphanum || c == '_' || (c.val ≥ 128 && !isSpace c)
+  let rec go : List Char → Bool → Nat
+    | [], _ => 0
+    | c :: cs, inWord => if isW c then (if inWord then go cs true else 1 + go cs true) else go cs false
+  go l false
+
+/-- Python `float(s)` for a string: decimal, exponent, sign, surrounding
+whitespace. -/
+def parseFloatStr (s : String) : Option (Int × Nat) :=
+  let l := stripList s.toList
+  let (neg, l) := match l with
+    | '-' :: r => (true, r)
+    | '+' :: r => (false, r)
+    | r => (false, r)
+  let ip := l.takeWhile (fun (c : Char) => c.isDigit || c == '_')
+  let r := l.drop ip.length
+  let (fp, r) := match r with
+    | '.' :: r' => let f := r'.takeWhile (fun (c : Char) => c.isDigit || c == '_'); (f, r'.drop f.length)
+    | _ => ([], r)
+  if ip.isEmpty && fp.isEmpty then none else
+  let (e, r) : Int × List Char := match r with
+    | c :: r' =>
+      if c == 'e' || c == 'E' then
+        let (en, r'') := match r' with
+          | '-' :: x => (true, x) | '+' :: x => (false, x) | x => (false, x)
+        let ed := r''.takeWhile Char.isDigit
+        if ed.isEmpty then (0, c :: r') else
+        ((if en then -1 else 1) * (digitsValue 10 ed : Int), r''.drop ed.length)
+      else (0, c :: r')
+    | [] => (0, [])
+  if !r.isEmpty then none else
+  let fd := fp.filter (· != '_')
+  let m : Int := digitsValue 10 (ip.filter (· != '_') ++ fd)
+  let m := if neg then -m else m
+  let sc : Int := (fd.length : Int) - e
+  if sc ≥ 0 then some (decNorm m sc.toNat) else some (m * 10 ^ (-sc).toNat, 0)
+
+/-- Python `int(s, base)` for a string. -/
+def parseIntStr (s : String) (base : Nat) : Option Int :=
+  let l := stripList s.toList
+  let (neg, l) := match l with
+    | '-' :: r => (true, r)
+    | '+' :: r => (false, r)
+    | r => (false, r)
+  let (base, l) :=
+    match base, l with
+    | 16, '0' :: c :: r => if c == 'x' || c == 'X' then (16, r) else (16, '0' :: c :: r)
+    | 8, '0' :: c :: r => if c == 'o' || c == 'O' then (8, r) else (8, '0' :: c :: r)
+    | 2, '0' :: c :: r => if c == 'b' || c == 'B' then (2, r) else (2, '0' :: c :: r)
+    | b, r => (b, r)
+  if l.isEmpty || l.head? == some '_' || l.getLast? == some '_' then none
+  else if l.all (fun c => c == '_' || (digitVal base c).isSome) then
+    let v : Int := digitsValue base l
+    some (if neg then -v else v)
+  else none
+
+/-- Upstream `url_quote`: UTF-8 percent-encoding; `/` stays unless `forQs`,
+where a space becomes `+`. -/
+def urlQuote (s : String) (forQs : Bool) : String :=
+  let hex := fun (b : UInt8) =>
+    let h := (Nat.toDigits 16 b.toNat).map Char.toUpper
+    "%" ++ String.ofList (if h.length < 2 then '0' :: h else h)
+  let bytes := s.toUTF8.toList
+  String.join (bytes.map fun b =>
+    let c := Char.ofNat b.toNat
+    if b < 128 && (c.isAlphanum || c == '_' || c == '.' || c == '-' || c == '~') then String.singleton c
+    else if b == 47 && !forQs then "/"
+    else if b == 32 && forQs then "+"
+    else hex b)
+
+/-- The names of the builtin filters. -/
+def builtinFilters : List String :=
+  ["abs", "attr", "batch", "capitalize", "center", "count", "d", "default", "dictsort", "e",
+   "escape", "filesizeformat", "first", "float", "forceescape", "format", "groupby", "indent",
+   "int", "join", "last", "length", "list", "lower", "items", "map", "min", "max", "pprint",
+   "reject", "rejectattr", "replace", "reverse", "round", "safe", "select", "selectattr",
+   "slice", "sort", "string", "striptags", "sum", "title", "trim", "truncate", "unique",
+   "upper", "urlencode", "wordcount", "wordwrap", "xmlattr", "tojson"]
+
+/-- The names of the builtin tests. -/
+def builtinTests : List String :=
+  ["odd", "even", "divisibleby", "defined", "undefined", "filter", "test", "none", "boolean",
+   "false", "true", "integer", "float", "lower", "upper", "string", "mapping", "number",
+   "sequence", "iterable", "callable", "sameas", "escaped", "in", "==", "eq", "equalto", "!=",
+   "ne", ">", "gt", "greaterthan", "ge", ">=", "<", "lt", "lessthan", "<=", "le"]
+
+def FCtx.hasFilter (fc : FCtx) (n : String) : Bool :=
+  builtinFilters.contains n || (fc.filters.lookup n).isSome
+
+def FCtx.hasTest (fc : FCtx) (n : String) : Bool :=
+  builtinTests.contains n || (fc.tests.lookup n).isSome
+
+/-- A native function's error is a `TypeError`. -/
+def liftNative (r : Except String Value) : Except RenderError Value :=
+  match r with
+  | .ok v => .ok v
+  | .error m => .error (.typeError m)
+
+/-- Comparison tests. -/
+def cmpTest (op : String) (a b : Value) : Except RenderError Bool :=
+  match op with
+  | "==" | "eq" | "equalto" => .ok (Value.pyEq a b)
+  | "!=" | "ne" => .ok (!Value.pyEq a b)
+  | _ =>
+    match Value.pyCmp a b with
+    | .error m => typeErr m
+    | .ok o =>
+      match op with
+      | ">" | "gt" | "greaterthan" => .ok (o == .gt)
+      | ">=" | "ge" => .ok (o != .lt)
+      | "<" | "lt" | "lessthan" => .ok (o == .lt)
+      | _ => .ok (o != .gt)
+
+/-- Whether a value is callable. -/
+def Value.isCallable : Value → Bool
+  | .macro .. | .native _ | .method .. | .superRef .. => true
+  | .loop _ _ _ _ _ (some _) => true
+  | _ => false
+
+/-- Apply a test (upstream `Environment.call_test`). -/
+def applyTest (fc : FCtx) (name : String) (v : Value) (args : List Value)
+    (kwargs : List (String × Value)) : Except RenderError Bool := do
+  let a0 := argAt args kwargs 0
+  let undefOp := fun (k : Except RenderError Bool) =>
+    match v with
+    | .undef i => failUndef i
+    | _ => k
+  match name with
+  | "odd" => undefOp do let r ← arith .mod v (.int 2); pure (Value.pyEq r (.int 1))
+  | "even" => undefOp do let r ← arith .mod v (.int 2); pure (Value.pyEq r (.int 0))
+  | "divisibleby" =>
+    match a0 "num" with
+    | some n => undefOp do let r ← arith .mod v n; pure (Value.pyEq r (.int 0))
+    | none => typeErr "test_divisibleby() missing 1 required positional argument: 'num'"
+  | "defined" => pure !v.isUndef
+  | "undefined" => pure v.isUndef
+  | "filter" => pure (match v with | .str s => fc.hasFilter s | _ => false)
+  | "test" => pure (match v with | .str s => fc.hasTest s | _ => false)
+  | "none" => pure (match v with | .none => true | _ => false)
+  | "boolean" => pure (match v with | .bool _ => true | _ => false)
+  | "false" => pure (match v with | .bool false => true | _ => false)
+  | "true" => pure (match v with | .bool true => true | _ => false)
+  | "integer" => pure (match v with | .int _ => true | _ => false)
+  | "float" => pure (match v with | .float .. => true | _ => false)
+  | "lower" => do
+    let s ← strOf fc.pol v
+    let l := s.toList
+    pure (l.any Char.isLower && !l.any Char.isUpper)
+  | "upper" => do
+    let s ← strOf fc.pol v
+    let l := s.toList
+    pure (l.any Char.isUpper && !l.any Char.isLower)
+  | "string" => pure (v.text?.isSome)
+  | "mapping" => pure (match v with | .dict _ => true | _ => false)
+  | "number" => pure (v.num?.isSome)
+  | "sequence" => pure (match v with
+      | .list _ | .tuple _ | .str _ | .markup _ | .dict _ => true
+      | .undef _ => fc.pol != .strict
+      | _ => false)
+  | "iterable" => pure (match v with
+      | .list _ | .tuple _ | .str _ | .markup _ | .dict _ | .ns _ => true
+      | .undef _ => fc.pol != .strict
+      | _ => false)
+  | "callable" => pure v.isCallable
+  | "sameas" =>
+    match a0 "other" with
+    | some o => pure (match v, o with
+        | .none, .none => true | .bool a, .bool b => a == b
+        | .ns a, .ns b => a == b | .undef _, .undef _ => false
+        | .int a, .int b => a == b && a ≥ -5 && a ≤ 256
+        | _, _ => false)
+    | none => typeErr "test_sameas() missing 1 required positional argument: 'other'"
+  | "escaped" => pure (match v with | .markup _ => true | _ => false)
+  | "in" =>
+    match a0 "seq" with
+    | some s => containsV fc.pol fc.heap v s
+    | none => typeErr "test_in() missing 1 required positional argument: 'seq'"
+  | "==" | "eq" | "equalto" | "!=" | "ne" | ">" | "gt" | "greaterthan" | "ge" | ">=" | "<"
+  | "lt" | "lessthan" | "<=" | "le" =>
+    match a0 "b" with
+    | some b =>
+      match v, b with
+      | .undef i, _ => if fc.pol == .strict || !(name == "==" || name == "eq" || name == "equalto" ||
+          name == "!=" || name == "ne") then failUndef i else cmpTest name v b
+      | _, .undef i => if fc.pol == .strict then failUndef i else cmpTest name v b
+      | _, _ => cmpTest name v b
+    | none => typeErr s!"{name} test requires an argument"
+  | _ =>
+    match fc.tests.lookup name with
+    | some f => do
+      let r ← liftNative (f fc.vars (v :: args) kwargs)
+      truthyOf fc.pol r
+    | none => .error (.runtime s!"No test named '{name}'.")
+
+/-- Upstream `do_join` (`d`, `attribute`). -/
+def joinFilter (fc : FCtx) (items : List Value) (d : Value) : Except RenderError Value := do
+  if !fc.autoescape then
+    let ss ← items.mapM (strOf fc.pol)
+    let sep ← strOf fc.pol d
+    pure (.str (sep.intercalate ss))
+  else
+    match d with
+    | .markup m => do
+      let ms ← items.mapM (escapeOf fc.pol)
+      pure (.markup (Markup.joinMarkup m ms))
+    | _ =>
+      if items.any Value.isMarkup then do
+        let sep ← strOf fc.pol d
+        let ms ← items.mapM (escapeOf fc.pol)
+        pure (.markup (Markup.joinMarkup (escape sep) ms))
+      else do
+        let ss ← items.mapM (strOf fc.pol)
+        let sep ← strOf fc.pol d
+        pure (.str (sep.intercalate ss))
+
+/-- `truncate` on characters (upstream `do_truncate`). -/
+def truncateList (l : List Char) (length : Nat) (killwords : Bool) (endS : List Char)
+    (leeway : Nat) : List Char :=
+  if l.length ≤ length + leeway then l
+  else
+    let cut := l.take (length - endS.length)
+    if killwords then cut ++ endS
+    else
+      -- `rsplit(" ", 1)[0]`: drop the last space and everything after it
+      let r := cut.reverse
+      let kept := match r.dropWhile (· != ' ') with
+        | ' ' :: rest => rest.reverse
+        | _ => cut
+      kept ++ endS
+
+/-- Upstream `do_indent`. -/
+def indentText (s : String) (ind : String) (first blank : Bool) : String :=
+  let lines := (splitLines (s.toList ++ ['\n'])).map String.ofList
+  let body :=
+    if blank then ("\n" ++ ind).intercalate lines
+    else match lines with
+      | [] => ""
+      | l0 :: rest =>
+        if rest.isEmpty then l0
+        else l0 ++ "\n" ++ "\n".intercalate (rest.map (fun l => if l.isEmpty then l else ind ++ l))
+  if first then ind ++ body else body
+
+/-- Upstream `do_filesizeformat`. -/
+def fileSizeFormat (x : Int × Nat) (binary : Bool) : String :=
+  let base : Nat := if binary then 1024 else 1000
+  let prefixes := if binary then ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"]
+    else ["kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
+  if decCmp x (1, 0) == .eq then "1 Byte"
+  else if decCmp x ((base : Int), 0) == .lt then
+    s!"{String.ofList (intDigits (x.1.tdiv (10 ^ x.2)))} Bytes"
+  else
+    let rec go : List String → Nat → String
+      | [], _ => ""
+      | [p], i =>
+        let unit : Int := (base : Int) ^ (i + 2)
+        let (m, s) := decDiv (decMul ((base : Int), 0) x) (unit, 0)
+        fixedText m s 1 ++ " " ++ p
+      | p :: ps, i =>
+        let unit : Int := (base : Int) ^ (i + 2)
+        if decCmp x (unit, 0) == .lt then
+          let (m, s) := decDiv (decMul ((base : Int), 0) x) (unit, 0)
+          fixedText m s 1 ++ " " ++ p
+        else go ps (i + 1)
+    go prefixes 0
+
+/-- Upstream `do_round`. -/
+def roundFilter (x : Int × Nat) (precision : Int) (method : String) : Except RenderError Value :=
+  let p := precision.toNat
+  match method with
+  | "common" => .ok (mkFloat (roundHalfEven x.1 x.2 p, p))
+  | "floor" =>
+    let d : Int := 10 ^ (x.2 - min x.2 p)
+    .ok (mkFloat (Int.fdiv (x.1 * 10 ^ (p - min x.2 p)) d, p))
+  | "ceil" =>
+    let d : Int := 10 ^ (x.2 - min x.2 p)
+    .ok (mkFloat (-(Int.fdiv (-(x.1 * 10 ^ (p - min x.2 p))) d), p))
+  | _ => .error (.runtime "method must be common, ceil or floor")
+
+/-- Upstream `do_xmlattr`. -/
+def xmlAttr (fc : FCtx) (kvs : List (Value × Value)) (autospace : Bool) : Except RenderError Value := do
+  let items ← kvs.filterMapM fun (k, v) => do
+    match v with
+    | .none | .undef _ => pure none
+    | _ =>
+      let key ← strOf fc.pol k
+      if key.toList.any (fun c => isSpace c || c == '/' || c == '>' || c == '=') then
+        .error (.typeError s!"Invalid character in attribute name: {pyStrRepr key}")
+      else do
+        let ev ← escapeOf fc.pol v
+        pure (some ((escape key).str ++ "=\"" ++ ev.str ++ "\""))
+  let rv := " ".intercalate items
+  let rv := if autospace && !rv.isEmpty then " " ++ rv else rv
+  pure (if fc.autoescape then .markup (Markup.markSafe rv) else .str rv)
+
+/-- Upstream `do_wordwrap` without hyphen breaking: greedy wrapping of each
+line at `width`, breaking long words when asked. -/
+def wordWrap (s : String) (width : Nat) (breakLong : Bool) (wrap : String) : String :=
+  let wrapLine := fun (line : List Char) =>
+    let words := splitWs line
+    let rec go : Nat → List (List Char) → List Char → List (List Char)
+      | 0, _, cur => if cur.isEmpty then [] else [cur]
+      | _ + 1, [], cur => if cur.isEmpty then [] else [cur]
+      | fuel + 1, w :: ws, cur =>
+        if cur.isEmpty then
+          if w.length > width && breakLong && width > 0 then
+            w.take width :: go fuel (w.drop width :: ws) []
+          else go fuel ws w
+        else if cur.length + 1 + w.length ≤ width then go fuel ws (cur ++ ' ' :: w)
+        else cur :: go fuel (w :: ws) []
+    (go (words.foldl (fun n w => n + w.length + 2) 2) words []).map String.ofList
+  wrap.intercalate ((splitLines s.toList).map (fun l => wrap.intercalate (wrapLine l)))
+
+mutual
+
+/-- Apply a filter (upstream `Environment.call_filter`). `depth` bounds the
+nesting of `map` calling filters by name. -/
+def applyFilterD (fc : FCtx) : Nat → String → Value → List Value → List (String × Value) →
+    Except RenderError Value
+  | 0, _, _, _, _ => .error .fuelExhausted
+  | d + 1, name, v, args, kwargs => do
+  let a := argAt args kwargs
+  let pol := fc.pol
+  let iter := fun (x : Value) => iterOf pol fc.heap x
+  match name with
+  | "abs" =>
+    match v with
+    | .int i => pure (.int i.natAbs)
+    | .float m s => pure (.float m.natAbs s)
+    | .bool b => pure (.int (if b then 1 else 0))
+    | .undef i => failUndef i
+    | _ => typeErr s!"bad operand type for abs(): '{v.typeName}'"
+  | "attr" =>
+    match a 0 "name" with
+    | some (.str n) =>
+      match v with
+      | .undef i => if pol == .chainable then pure v else failUndef i
+      | _ => pure ((pyAttr fc.heap v n).getD (.undef (.attr v.objectTypeRepr n)))
+    | _ => typeErr "attr requires a string name"
+  | "batch" => do
+    let n ← intArg ((a 0 "linecount").getD .none) "linecount"
+    if n ≤ 0 then typeErr "batch linecount must be positive" else
+    let fill := a 1 "fill_with"
+    let xs ← iter v
+    let k := n.toNat
+    let rec chunks : Nat → List Value → List Value
+      | 0, _ => []
+      | _ + 1, [] => []
+      | fuel + 1, ys =>
+        let c := ys.take k
+        let c := match fill with
+          | some f => if c.length < k && (match f with | .none => false | _ => true)
+              then c ++ List.replicate (k - c.length) f else c
+          | none => c
+        .list c :: chunks fuel (ys.drop k)
+    pure (.list (chunks (xs.length + 1) xs))
+  | "capitalize" => do let s ← strOf pol v; pure (keepKind v (strCapitalize s))
+  | "center" => do
+    let s ← strOf pol v
+    let w ← intArg ((a 0 "width").getD (.int 80)) "width"
+    let n := s.length
+    if w.toNat ≤ n then pure (keepKind v s) else
+    let marg := w.toNat - n
+    let left := marg / 2 + (marg % 2 * (w.toNat % 2))
+    pure (keepKind v (String.ofList (List.replicate left ' ') ++ s ++
+      String.ofList (List.replicate (marg - left) ' ')))
+  | "count" | "length" => do let n ← lenOf pol v; pure (.int n)
+  | "d" | "default" => do
+    let dv := (a 0 "default_value").getD (.str "")
+    let boolean := ((a 1 "boolean").map Value.truthy).getD false
+    if v.isUndef then pure dv
+    else if boolean then do
+      let t ← truthyOf pol v
+      pure (if t then v else dv)
+    else pure v
+  | "dictsort" => do
+    let cs := ((a 0 "case_sensitive").map Value.truthy).getD false
+    let by_ := (a 1 "by").getD (.str "key")
+    let rev := ((a 2 "reverse").map Value.truthy).getD false
+    let pos ← match by_ with
+      | .str "key" => pure 0 | .str "value" => pure 1
+      | _ => .error (.runtime "You can only sort by either \"key\" or \"value\"")
+    match v with
+    | .dict kvs => do
+      let key := fun (p : Value × Value) => let x := if pos == 0 then p.1 else p.2
+        if cs then x else ignoreCase x
+      let sorted ← sortBy (fun p q => if rev then pyLe (key q) (key p) else pyLe (key p) (key q)) kvs
+      pure (.list (sorted.map (fun p => .tuple [p.1, p.2])))
+    | .undef i => failUndef i
+    | _ => typeErr "dictsort requires a mapping"
+  | "e" | "escape" => do let m ← escapeOf pol v; pure (.markup m)
+  | "filesizeformat" =>
+    let binary := ((a 0 "binary").map Value.truthy).getD false
+    match v.num?, v with
+    | some x, _ => pure (.str (fileSizeFormat x binary))
+    | none, .str s =>
+      match parseFloatStr s with
+      | some x => pure (.str (fileSizeFormat x binary))
+      | none => typeErr s!"could not convert string to float: {pyStrRepr s}"
+    | _, _ => typeErr "filesizeformat requires a number"
+  | "first" => do
+    let xs ← iter v
+    pure (xs.head?.getD (.undef (.hint "No first item, sequence was empty.")))
+  | "float" =>
+    let dflt := (a 0 "default").getD (.float 0 0)
+    match v with
+    | .int i => pure (.float i 0)
+    | .bool b => pure (.float (if b then 1 else 0) 0)
+    | .float .. => pure v
+    | .str s | .markup ⟨s⟩ => pure ((parseFloatStr s).map mkFloat |>.getD dflt)
+    | _ => pure dflt
+  | "forceescape" =>
+    match v with
+    | .markup m => pure (.markup (escape m.str))
+    | _ => do let s ← strOf pol v; pure (.markup (escape s))
+  | "format" => do
+    if !args.isEmpty && !kwargs.isEmpty then
+      .error (.runtime "can't handle positional and keyword arguments at the same time")
+    else
+      let packed : Value := if !kwargs.isEmpty then .dict (kwargs.map (fun p => (.str p.1, p.2)))
+        else .tuple args
+      match v with
+      | .markup m => do let r ← pctFormat pol true m.str packed; pure (.markup (Markup.markSafe r))
+      | _ => do let s ← strOf pol v; let r ← pctFormat pol false s packed; pure (.str r)
+  | "groupby" => do
+    let attr ← match a 0 "attribute" with
+      | some x => pure x
+      | none => typeErr "groupby() missing 1 required positional argument: 'attribute'"
+    let dflt := a 1 "default"
+    let cs := ((a 2 "case_sensitive").map Value.truthy).getD false
+    let xs ← iter v
+    let keyed ← xs.mapM (fun x => do
+      let k ← attrGet fc attr dflt x
+      pure ((if cs then k else ignoreCase k), x))
+    let sorted ← sortBy (fun p q => pyLe p.1 q.1) keyed
+    let rec groups : Nat → List (Value × Value) → Except RenderError (List Value)
+      | 0, _ => pure []
+      | _ + 1, [] => pure []
+      | fuel + 1, (k, x) :: rest =>
+        let same := rest.takeWhile (fun p => Value.pyEq p.1 k)
+        let others := rest.drop same.length
+        let members := x :: same.map Prod.snd
+        do
+          let shown ← if cs then pure k else attrGet fc attr dflt x
+          let more ← groups fuel others
+          pure (.tuple [shown, .list members] :: more)
+    pure (.list (← groups (sorted.length + 1) sorted))
+  | "indent" => do
+    let s ← strOf pol v
+    let w := (a 0 "width").getD (.int 4)
+    let ind ← match w with
+      | .str t => pure t
+      | x => do let k ← intArg x "width"; pure (String.ofList (List.replicate k.toNat ' '))
+    let first := ((a 1 "first").map Value.truthy).getD false
+    let blank := ((a 2 "blank").map Value.truthy).getD false
+    pure (keepKind v (indentText s ind first blank))
+  | "int" => do
+    let dflt := (a 0 "default").getD (.int 0)
+    let base ← intArg ((a 1 "base").getD (.int 10)) "base"
+    match v with
+    | .int _ => pure v
+    | .bool b => pure (.int (if b then 1 else 0))
+    | .float m s => pure (.int (m.tdiv (10 ^ s)))
+    | .str s | .markup ⟨s⟩ =>
+      match parseIntStr s base.toNat with
+      | some i => pure (.int i)
+      | none =>
+        match parseFloatStr s with
+        | some (m, sc) => pure (.int (m.tdiv (10 ^ sc)))
+        | none => pure dflt
+    | _ => pure dflt
+  | "items" =>
+    match v with
+    | .undef _ => pure (.list [])
+    | .dict kvs => pure (.list (kvs.map (fun p => .tuple [p.1, p.2])))
+    | _ => typeErr "Can only get item pairs from a mapping."
+  | "join" => do
+    let xs ← iter v
+    let xs ← match a 1 "attribute" with
+      | some at_ => xs.mapM (attrGet fc at_ none)
+      | none => pure xs
+    joinFilter fc xs ((a 0 "d").getD (.str ""))
+  | "last" => do
+    let xs ← iter v
+    pure (xs.getLast?.getD (.undef (.hint "No last item, sequence was empty.")))
+  | "list" => do let xs ← iter v; pure (.list xs)
+  | "lower" => do let s ← strOf pol v; pure (keepKind v (strLower s))
+  | "upper" => do let s ← strOf pol v; pure (keepKind v (strUpper s))
+  | "map" => do
+    let xs ← iter v
+    if args.isEmpty && (kwargs.lookup "attribute").isSome then
+      let at_ := (kwargs.lookup "attribute").getD .none
+      let dflt := kwargs.lookup "default"
+      match (kwargs.filter (fun p => p.1 != "attribute" && p.1 != "default")).head? with
+      | some (k, _) => .error (.runtime s!"Unexpected keyword argument {pyStrRepr k}")
+      | none => do let ys ← xs.mapM (attrGet fc at_ dflt); pure (.list ys)
+    else
+      match args with
+      | .str fname :: rest => do
+        let ys ← xs.mapM (fun x => applyFilterD fc d fname x rest kwargs)
+        pure (.list ys)
+      | _ => .error (.runtime "map requires a filter argument")
+  | "min" | "max" => do
+    let cs := ((a 0 "case_sensitive").map Value.truthy).getD false
+    let at_ := (a 1 "attribute").getD .none
+    let xs ← iter v
+    match xs with
+    | [] => pure (.undef (.hint "No aggregated item, sequence was empty."))
+    | x :: rest => do
+      let key := fun (y : Value) => do
+        let k ← attrGet fc at_ none y
+        pure (if cs then k else ignoreCase k)
+      let best ← rest.foldlM (fun (b : Value) (y : Value) => do
+        let kb ← key b
+        let ky ← key y
+        let le ← pyLe ky kb
+        if name == "min" then (if le && !(Value.pyEq ky kb) then pure y else pure b)
+        else (if !le then pure y else pure b)) x
+      pure best
+  | "pprint" => pure (.str v.repr)
+  | "select" | "reject" | "selectattr" | "rejectattr" => do
+    let lookupAttr := name == "selectattr" || name == "rejectattr"
+    let keep := name == "select" || name == "selectattr"
+    let t0 ← truthyOf pol v
+    if !t0 then pure (.list []) else
+    let xs ← iter v
+    let (attr, rest) := if lookupAttr then (args.head?, args.drop 1) else (none, args)
+    if lookupAttr && attr.isNone then .error (.runtime "Missing parameter for attribute name") else
+    let ys ← xs.filterM (fun x => do
+      let y ← match attr with
+        | some at_ => attrGet fc at_ none x
+        | none => pure x
+      let r ← match rest with
+        | .str tname :: targs => applyTest fc tname y targs kwargs
+        | _ => truthyOf pol y
+      pure (r == keep))
+    pure (.list ys)
+  | "replace" => do
+    let old ← match a 0 "old" with | some x => pure x | none => typeErr "replace() missing 'old'"
+    let new ← match a 1 "new" with | some x => pure x | none => typeErr "replace() missing 'new'"
+    let count ← match a 2 "count" with
+      | none | some .none => pure (-1 : Int)
+      | some c => intArg c "count"
+    if !fc.autoescape then do
+      let s ← strOf pol v
+      let o ← strOf pol old
+      let n ← strOf pol new
+      pure (.str (String.ofList (replaceList s.toList o.toList n.toList count)))
+    else
+      let escS := (old.isMarkup || new.isMarkup) && !v.isMarkup
+      if escS || v.isMarkup then do
+        let sm ← escapeOf pol v
+        let om ← escapeOf pol old
+        let nm ← escapeOf pol new
+        pure (.markup (Markup.markSafe (String.ofList
+          (replaceList sm.str.toList om.str.toList nm.str.toList count))))
+      else do
+        let s ← strOf pol v
+        let o ← strOf pol old
+        let n ← strOf pol new
+        pure (.str (String.ofList (replaceList s.toList o.toList n.toList count)))
+  | "reverse" =>
+    match v with
+    | .str s => pure (.str (String.ofList s.toList.reverse))
+    | .markup m => pure (.markup (Markup.markSafe (String.ofList m.str.toList.reverse)))
+    | _ => do let xs ← iter v; pure (.list xs.reverse)
+  | "round" => do
+    let p ← intArg ((a 0 "precision").getD (.int 0)) "precision"
+    let meth ← match (a 1 "method").getD (.str "common") with
+      | .str m => pure m
+      | _ => .error (.runtime "method must be common, ceil or floor")
+    match v.num? with
+    | some x => roundFilter x p meth
+    | none => match v with
+      | .undef i => failUndef i
+      | _ => typeErr s!"type {v.typeName} doesn't define __round__ method"
+  | "safe" =>
+    match v with
+    | .markup _ => pure v
+    | _ => do let s ← strOf pol v; pure (.markup (Markup.markSafe s))
+  | "slice" => do
+    let n ← intArg ((a 0 "slices").getD .none) "slices"
+    if n ≤ 0 then typeErr "slice count must be positive" else
+    let fill := a 1 "fill_with"
+    let seq ← iter v
+    let len := seq.length
+    let k := n.toNat
+    let per := len / k
+    let extra := len % k
+    let rec build : Nat → Nat → Nat → List Value
+      | 0, _, _ => []
+      | fuel + 1, i, off =>
+        if i ≥ k then [] else
+        let start := off + i * per
+        let off' := if i < extra then off + 1 else off
+        let stop := off' + (i + 1) * per
+        let tmp := (seq.drop start).take (stop - start)
+        let tmp := match fill with
+          | some f => if i ≥ extra && (match f with | .none => false | _ => true)
+              then tmp ++ [f] else tmp
+          | none => tmp
+        .list tmp :: build fuel (i + 1) off'
+    pure (.list (build (k + 1) 0 0))
+  | "sort" => do
+    let rev := ((a 0 "reverse").map Value.truthy).getD false
+    let cs := ((a 1 "case_sensitive").map Value.truthy).getD false
+    let attr := (a 2 "attribute").getD .none
+    let xs ← iter v
+    let attrs : List Value := match attr with
+      | .str s => (s.splitOn ",").map Value.str
+      | .none => [.none]
+      | x => [x]
+    let keyed ← xs.mapM (fun x => do
+      let ks ← attrs.mapM (fun at_ => attrGet fc at_ none x)
+      pure (Value.list (if cs then ks else ks.map ignoreCase), x))
+    let sorted ← sortBy (fun p q => if rev then pyLe q.1 p.1 else pyLe p.1 q.1) keyed
+    pure (.list (sorted.map Prod.snd))
+  | "string" =>
+    match v with
+    | .markup _ => pure v
+    | _ => do let s ← strOf pol v; pure (.str s)
+  | "striptags" =>
+    match v with
+    | .markup m => pure (.str m.striptags)
+    | _ => do let s ← strOf pol v; pure (.str (Markup.markSafe s).striptags)
+  | "sum" => do
+    let attr := (a 0 "attribute").getD .none
+    let start := (a 1 "start").getD (.int 0)
+    let xs ← iter v
+    xs.foldlM (fun acc x => do
+      let y ← attrGet fc attr none x
+      match acc, y with
+      | .undef i, _ => failUndef i
+      | _, .undef i => failUndef i
+      | _, _ => arith .add acc y) start
+  | "title" => do let s ← strOf pol v; pure (.str (String.ofList (titleList s.toList)))
+  | "tojson" => do
+    let ind ← match a 0 "indent" with
+      | none | some .none => pure none
+      | some x => do let k ← intArg x "indent"; pure (some k.toNat)
+    let j ← jsonDump ind 0 v
+    pure (.markup (Markup.markSafe (htmlsafeJson j)))
+  | "trim" => do
+    let s ← strOf pol v
+    let chars ← match a 0 "chars" with
+      | none | some .none => pure none
+      | some c => do let t ← strOf pol c; pure (some t.toList)
+    pure (keepKind v (String.ofList (stripChars chars s.toList)))
+  | "truncate" => do
+    let s ← strOf pol v
+    let length ← intArg ((a 0 "length").getD (.int 255)) "length"
+    let kill := ((a 1 "killwords").map Value.truthy).getD false
+    let endS ← strOf pol ((a 2 "end").getD (.str "..."))
+    let leeway ← match a 3 "leeway" with
+      | none | some .none => pure (fc.leeway : Int)
+      | some x => intArg x "leeway"
+    if length < endS.length then .error (.runtime s!"expected length >= {endS.length}, got {length}")
+    else if leeway < 0 then .error (.runtime s!"expected leeway >= 0, got {leeway}")
+    else
+      let r := truncateList s.toList length.toNat kill endS.toList leeway.toNat
+      if r.length == s.length && r == s.toList then pure v
+      else match v with
+        | .markup _ =>
+          let base := r.take (r.length - endS.length)
+          pure (.markup (Markup.markSafe (String.ofList base ++ (escape endS).str)))
+        | _ => pure (.str (String.ofList r))
+  | "unique" => do
+    let cs := ((a 0 "case_sensitive").map Value.truthy).getD false
+    let attr := (a 1 "attribute").getD .none
+    let xs ← iter v
+    let (_, out) ← xs.foldlM (fun (st : List Value × List Value) x => do
+      let k ← attrGet fc attr none x
+      let k := if cs then k else ignoreCase k
+      if st.1.any (fun s => Value.pyEq s k) then pure st else pure (k :: st.1, st.2 ++ [x])) ([], [])
+    pure (.list out)
+  | "urlencode" =>
+    match v with
+    | .dict kvs => do
+      let parts ← kvs.mapM (fun p => do
+        let k ← strOf pol p.1
+        let x ← strOf pol p.2
+        pure (urlQuote k true ++ "=" ++ urlQuote x true))
+      pure (.str ("&".intercalate parts))
+    | .list xs | .tuple xs => do
+      let parts ← xs.mapM (fun p => do
+        match p with
+        | .tuple [k, x] | .list [k, x] => do
+          let k ← strOf pol k
+          let x ← strOf pol x
+          pure (urlQuote k true ++ "=" ++ urlQuote x true)
+        | _ => typeErr "urlencode requires (key, value) pairs")
+      pure (.str ("&".intercalate parts))
+    | _ => do let s ← strOf pol v; pure (.str (urlQuote s false))
+  | "wordcount" => do let s ← strOf pol v; pure (.int (wordCount s.toList))
+  | "wordwrap" => do
+    let s ← strOf pol v
+    let w ← intArg ((a 0 "width").getD (.int 79)) "width"
+    let bl := ((a 1 "break_long_words").map Value.truthy).getD true
+    let ws ← match a 2 "wrapstring" with
+      | none | some .none => pure "\n"
+      | some x => strOf pol x
+    pure (.str (wordWrap s w.toNat bl ws))
+  | "xmlattr" =>
+    let autospace := ((a 0 "autospace").map Value.truthy).getD true
+    match v with
+    | .dict kvs => xmlAttr fc kvs autospace
+    | _ => typeErr "xmlattr requires a mapping"
+  | _ =>
+    match fc.filters.lookup name with
+    | some f => liftNative (f fc.vars (v :: args) kwargs)
+    | none => .error (.assertion s!"No filter named '{name}'.")
+
+end
+
+/-- Apply a filter by name. -/
+def applyFilter (fc : FCtx) (name : String) (v : Value) (args : List Value)
+    (kwargs : List (String × Value)) : Except RenderError Value :=
+  applyFilterD fc (args.length + 2) name v args kwargs
+
+end LeanJinja2

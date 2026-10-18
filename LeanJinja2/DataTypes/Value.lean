@@ -30,7 +30,7 @@ structure LoopRec where
   filter : Option Expr
   body : List Node
   else_ : List Node
-  deriving Repr, Inhabited
+  deriving Inhabited
 
 /-- What an undefined value knows about how it came to be (upstream
 `Undefined(hint, obj, name)`); used for the error message. -/
@@ -71,7 +71,12 @@ inductive Value where
   | superRef (name : String) (depth : Nat)
   /-- A `namespace()` object, by heap address. -/
   | ns (addr : Nat)
-  deriving Repr, Inhabited
+  deriving Inhabited
+
+/-- A function the host provides (a global, a custom filter or test): it
+receives the template's variables, the positional and the keyword arguments.
+A filter receives the filtered value as its first positional argument. -/
+abbrev NativeFn := List (String × Value) → List Value → List (String × Value) → Except String Value
 
 /-- How undefined values behave (upstream `Undefined` subclasses). -/
 inductive UndefinedPolicy where

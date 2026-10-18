@@ -839,7 +839,7 @@ def fuelFor (ts : List TokKind) : Nat := 16 * (ts.length + 2)
 end Parse
 
 /-- Parse significant tokens into a template (upstream `Parser.parse`). -/
-def parseTokens (ts : List TokKind) : Except ParseError Template :=
+def parseTokens (ts : List TokKind) : Except ParseError (List Node) :=
   match Parse.subparse (Parse.fuelFor ts) [] [] ts with
   | .error e => .error e
   | .ok (body, []) => .ok body

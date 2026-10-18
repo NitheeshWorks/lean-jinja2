@@ -62,7 +62,7 @@ inductive Expr where
   | concat (items : List Expr)
   /-- `body if test else else_`; a missing `else` is `none`. -/
   | cond (test body : Expr) (else_ : Option Expr)
-  deriving Repr, Inhabited
+  deriving Inhabited
 
 /-- One filter application in a filter chain: name, positional and keyword
 arguments. -/
@@ -70,7 +70,7 @@ structure FilterCall where
   name : String
   args : List Expr
   kwargs : List (String × Expr)
-  deriving Repr, Inhabited
+  deriving Inhabited
 
 /-- Assignment targets: a name, a namespace attribute `ns.attr`, or a tuple of
 targets (upstream `Name`/`NSRef`/`Tuple` in store context). -/
@@ -78,7 +78,7 @@ inductive Target where
   | name (n : String)
   | nsAttr (ns attr : String)
   | tuple (items : List Target)
-  deriving Repr, Inhabited
+  deriving Inhabited
 
 /-- A macro or call-block parameter: name and optional default. -/
 abbrev Param := String × Option Expr
@@ -114,9 +114,7 @@ inductive Node where
   | filterBlock (filters : List FilterCall) (body : List Node)
   /-- `{% autoescape e %}body{% endautoescape %}`. -/
   | autoescape (e : Expr) (body : List Node)
-  deriving Repr, Inhabited
+  deriving Inhabited
 
-/-- A parsed template body. -/
-abbrev Template := List Node
 
 end LeanJinja2
