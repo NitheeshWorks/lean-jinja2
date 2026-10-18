@@ -407,7 +407,7 @@ def pFilterExpr : Nat → Expr → List TokKind → PR Expr
     match ts with
     | .op .pipe :: r => do
       let (f, r) ← pFilterOne n r
-      pFilterExpr n (.filter e f) r
+      pFilterExpr n (.filter e f.name f.args f.kwargs) r
     | .name "is" :: r => do
       let (e, r) ← pTest n e r
       pFilterExpr n e r
@@ -497,8 +497,8 @@ def pFilterOne : Nat → List TokKind → PR FilterCall
     let (name, ts) ← pDotted n name ts
     if isOp .lparen ts.head? then do
       let ((args, kwargs), ts) ← pCallArgs n ts.tail
-      .ok (.mk name args kwargs, ts)
-    else .ok (.mk name [] [], ts)
+      .ok (⟨name, args, kwargs⟩, ts)
+    else .ok (⟨name, [], []⟩, ts)
 
 /-- `.name` continuations of a filter or test name. -/
 def pDotted : Nat → String → List TokKind → PR String

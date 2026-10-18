@@ -30,7 +30,7 @@ structure LoopRec where
   filter : Option Expr
   body : List Node
   else_ : List Node
-  deriving Repr, Inhabited, BEq
+  deriving Repr, Inhabited
 
 /-- What an undefined value knows about how it came to be (upstream
 `Undefined(hint, obj, name)`); used for the error message. -/
@@ -71,7 +71,7 @@ inductive Value where
   | superRef (name : String) (depth : Nat)
   /-- A `namespace()` object, by heap address. -/
   | ns (addr : Nat)
-  deriving Repr, Inhabited, BEq
+  deriving Repr, Inhabited
 
 /-- How undefined values behave (upstream `Undefined` subclasses). -/
 inductive UndefinedPolicy where

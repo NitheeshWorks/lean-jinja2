@@ -39,7 +39,6 @@ inductive CmpOp where
   | eq | ne | lt | lteq | gt | gteq | «in» | notin
   deriving DecidableEq, Repr, Inhabited, BEq
 
-mutual
 /-- Expressions (upstream `nodes.Expr` subclasses). -/
 inductive Expr where
   | const (c : Const)
@@ -52,7 +51,8 @@ inductive Expr where
   /-- `a:b:c` inside a subscript. -/
   | slice (start stop step : Option Expr)
   | call (f : Expr) (args : List Expr) (kwargs : List (String × Expr))
-  | filter (e : Expr) (f : FilterCall)
+  /-- `e | name(args, kwargs)`. -/
+  | filter (e : Expr) (name : String) (args : List Expr) (kwargs : List (String × Expr))
   | test (e : Expr) (name : String) (args : List Expr) (kwargs : List (String × Expr))
   | unop (op : UnOp) (e : Expr)
   | binop (op : BinOp) (l r : Expr)
@@ -62,17 +62,15 @@ inductive Expr where
   | concat (items : List Expr)
   /-- `body if test else else_`; a missing `else` is `none`. -/
   | cond (test body : Expr) (else_ : Option Expr)
-  deriving Repr, Inhabited, BEq
+  deriving Repr, Inhabited
 
-/-- One filter application: name, positional and keyword arguments. -/
-inductive FilterCall where
-  | mk (name : String) (args : List Expr) (kwargs : List (String × Expr))
-  deriving Repr, Inhabited, BEq
-end
-
-/-- The name of a filter call. -/
-def FilterCall.name : FilterCall → String
-  | .mk n _ _ => n
+/-- One filter application in a filter chain: name, positional and keyword
+arguments. -/
+structure FilterCall where
+  name : String
+  args : List Expr
+  kwargs : List (String × Expr)
+  deriving Repr, Inhabited
 
 /-- Assignment targets: a name, a namespace attribute `ns.attr`, or a tuple of
 targets (upstream `Name`/`NSRef`/`Tuple` in store context). -/
@@ -80,7 +78,7 @@ inductive Target where
   | name (n : String)
   | nsAttr (ns attr : String)
   | tuple (items : List Target)
-  deriving Repr, Inhabited, BEq
+  deriving Repr, Inhabited
 
 /-- A macro or call-block parameter: name and optional default. -/
 abbrev Param := String × Option Expr
@@ -116,7 +114,7 @@ inductive Node where
   | filterBlock (filters : List FilterCall) (body : List Node)
   /-- `{% autoescape e %}body{% endautoescape %}`. -/
   | autoescape (e : Expr) (body : List Node)
-  deriving Repr, Inhabited, BEq
+  deriving Repr, Inhabited
 
 /-- A parsed template body. -/
 abbrev Template := List Node

@@ -20,7 +20,9 @@ lake env lean LeanJinja2/Proofs/Foo.lean     # check one file (never bare `lean`
 
 ## Rules that CI enforces
 
-* No `sorry`, no `partial def`, no `unsafe` under `LeanJinja2/`.
+* `scripts/Axioms.lean` checks every declaration (theorems and definitions):
+  no `sorry`/`admit`, no `partial def` (derived `Repr` printers excepted), no
+  `unsafe`, no `@[implemented_by]`/`@[extern]`, no `native_decide`/`bv_decide`, under `LeanJinja2/`.
 * Every theorem reaches only `propext`, `Quot.sound`, `Classical.choice`.
 * Every symbol in `docs/traceability.toml` resolves; every test path exists.
 
