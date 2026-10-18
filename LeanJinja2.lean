@@ -1,3 +1,4 @@
+import LeanJinja2.Proofs
 import LeanJinja2.APIs
 import LeanJinja2.Proofs.Verified
 

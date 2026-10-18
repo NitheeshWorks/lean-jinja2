@@ -1,4 +1,5 @@
-import LeanJinja2.Proofs.Basic
+import LeanJinja2.Proofs.Lexer
+import LeanJinja2.RepoImpl
 
 /-!
 # The harness: one `Verified<Layer>` structure per layer
