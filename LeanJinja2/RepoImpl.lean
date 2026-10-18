@@ -9,3 +9,4 @@ import LeanJinja2.RepoImpl.Methods
 import LeanJinja2.RepoImpl.AstWalk
 import LeanJinja2.RepoImpl.Render
 import LeanJinja2.RepoImpl.Template
+import LeanJinja2.RepoImpl.Pretty

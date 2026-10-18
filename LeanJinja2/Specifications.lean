@@ -1,1 +1,2 @@
 import LeanJinja2.Specifications.Render
+import LeanJinja2.Specifications.Syntax

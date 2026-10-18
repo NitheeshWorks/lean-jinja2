@@ -440,27 +440,41 @@ def pSubscriptItems : Nat → List TokKind → PR (List Expr)
 /-- `parse_subscribed`: an expression or a slice. -/
 def pSubscribed : Nat → List TokKind → PR Expr
   | 0, ts => deep ts
-  | n + 1, ts => do
-    let (start, ts) ← if isOp .colon ts.head? then pure (none, ts)
-      else do let (e, ts) ← pExpr n true ts; pure (some e, ts)
-    match start with
-    | some e => if isOp .colon ts.head? then pSliceRest n (some e) ts.tail else .ok (e, ts)
-    | none => pSliceRest n none ts.tail
+  | n + 1, ts =>
+    if isOp .colon ts.head? then pSliceRest n none ts.tail
+    else do
+      let (e, ts) ← pExpr n true ts
+      if isOp .colon ts.head? then pSliceRest n (some e) ts.tail else .ok (e, ts)
 
-/-- A slice after its first colon. -/
+/-- A slice after its first colon: the stop. -/
 def pSliceRest : Nat → Option Expr → List TokKind → PR Expr
   | 0, _, ts => deep ts
-  | n + 1, start, ts => do
-    let stopEnd := fun (t : Option TokKind) => isOp .colon t || isOp .rbracket t || isOp .comma t
-    let (stop, ts) ← if stopEnd ts.head? then pure (none, ts)
-      else do let (e, ts) ← pExpr n true ts; pure (some e, ts)
+  | n + 1, start, ts =>
+    if isOp .colon ts.head? || isOp .rbracket ts.head? || isOp .comma ts.head? then pSliceStep n start none ts
+    else do
+      let (e, ts) ← pExpr n true ts
+      pSliceStep n start (some e) ts
+
+/-- A slice after its stop: the optional step. -/
+def pSliceStep : Nat → Option Expr → Option Expr → List TokKind → PR Expr
+  | 0, _, _, ts => deep ts
+  | n + 1, start, stop, ts =>
     if isOp .colon ts.head? then
-      let ts := ts.tail
-      if isOp .rbracket ts.head? || isOp .comma ts.head? then .ok (.slice start stop none, ts)
+      if isOp .rbracket ts.tail.head? || isOp .comma ts.tail.head? then .ok (.slice start stop none, ts.tail)
       else do
-        let (step, ts) ← pExpr n true ts
+        let (step, ts) ← pExpr n true ts.tail
         .ok (.slice start stop (some step), ts)
     else .ok (.slice start stop none, ts)
+
+/-- A keyword argument's `name =`. -/
+def kwKey : List TokKind → Option (String × List TokKind)
+  | .name k :: .op .assign :: r => some (k, r)
+  | _ => none
+
+/-- `*args` or `**kwargs` (not supported). -/
+def isStarArg : Option TokKind → Bool
+  | some (.op .mul) | some (.op .pow) => true
+  | _ => false
 
 /-- `parse_call_args` after `(`, up to and including `)`. `*args`/`**kwargs`
 are not supported. -/
@@ -468,25 +482,26 @@ def pCallArgs : Nat → List TokKind → PR (List Expr × List (String × Expr))
   | 0, ts => deep ts
   | n + 1, ts =>
     if isOp .rparen ts.head? then .ok (([], []), ts.tail)
+    else if isStarArg ts.head? then fail "*args and **kwargs are not supported" ts
+    else match kwKey ts with
+      | some (k, r) => do
+        let (v, r) ← pExpr n true r
+        let (rest, r) ← pArgsTail n r
+        if rest.1.isEmpty then .ok ((rest.1, (k, v) :: rest.2), r)
+        else fail "invalid syntax for function call expression" r
+      | none => do
+        let (v, r) ← pExpr n true ts
+        let (rest, r) ← pArgsTail n r
+        .ok ((v :: rest.1, rest.2), r)
+
+/-- After an argument: `)` or `,` and more arguments. -/
+def pArgsTail : Nat → List TokKind → PR (List Expr × List (String × Expr))
+  | 0, ts => deep ts
+  | n + 1, ts =>
+    if isOp .rparen ts.head? then .ok (([], []), ts.tail)
     else do
-      let (item, ts) ← match ts with
-        | .op .mul :: _ | .op .pow :: _ => fail "*args and **kwargs are not supported" ts
-        | .name k :: .op .assign :: r => do
-          let (v, r) ← pExpr n true r
-          pure (Sum.inr (k, v), r)
-        | _ => do
-          let (v, r) ← pExpr n true ts
-          pure (Sum.inl v, r)
-      let (rest, ts) ←
-        if isOp .rparen ts.head? then pure (([], []), ts.tail)
-        else do
-          let ((), ts) ← expect (.op .comma) ts
-          pCallArgs n ts
-      match item with
-      | .inl v => .ok ((v :: rest.1, rest.2), ts)
-      | .inr kv =>
-        if rest.1.isEmpty then .ok ((rest.1, kv :: rest.2), ts)
-        else fail "invalid syntax for function call expression" ts
+      let ((), ts) ← expect (.op .comma) ts
+      pCallArgs n ts
 
 /-- One filter: dotted name and optional arguments (`parse_filter`, one
 iteration). -/
@@ -517,17 +532,22 @@ def pTest : Nat → Expr → List TokKind → PR Expr
     let (neg, ts) := if isName "not" ts.head? then (true, ts.tail) else (false, ts)
     let (name, ts) ← expectName ts
     let (name, ts) ← pDotted n name ts
-    let ((args, kwargs), ts) ←
-      if isOp .lparen ts.head? then pCallArgs n ts.tail
-      else if testArgStart ts.head? then
-        if isName "is" ts.head? then fail "You cannot chain multiple tests with is" ts
-        else do
-          let (a, ts) ← pPrimary n ts
-          let (a, ts) ← pPostfix n a ts
-          pure (([a], []), ts)
-      else pure (([], []), ts)
+    let ((args, kwargs), ts) ← pTestArgs n ts
     let t := Expr.test e name args kwargs
     .ok (if neg then .unop .not t else t, ts)
+
+/-- A test's arguments: in parentheses, one bare primary, or none. -/
+def pTestArgs : Nat → List TokKind → PR (List Expr × List (String × Expr))
+  | 0, ts => deep ts
+  | n + 1, ts =>
+    if isOp .lparen ts.head? then pCallArgs n ts.tail
+    else if testArgStart ts.head? then
+      if isName "is" ts.head? then fail "You cannot chain multiple tests with is" ts
+      else do
+        let (a, ts) ← pPrimary n ts
+        let (a, ts) ← pPostfix n a ts
+        .ok (([a], []), ts)
+    else .ok (([], []), ts)
 
 end
 

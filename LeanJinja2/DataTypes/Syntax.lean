@@ -21,7 +21,7 @@ inductive Op where
   | add | sub | div | floordiv | mul | mod | pow | tilde
   | lbracket | rbracket | lparen | rparen | lbrace | rbrace
   | eq | ne | gt | gteq | lt | lteq | assign | dot | colon | pipe | comma | semicolon
-  deriving DecidableEq, Repr, Inhabited, BEq
+  deriving DecidableEq, Repr, Inhabited
 
 /-- The source text of an operator. -/
 def Op.text : Op → String
@@ -57,13 +57,13 @@ inductive TokKind where
   | float (m : Nat) (s : Nat)
   | str (s : String)
   | op (o : Op)
-  deriving DecidableEq, Repr, Inhabited, BEq
+  deriving DecidableEq, Repr, Inhabited
 
 /-- A token: its kind and the exact source characters it covers. -/
 structure Token where
   kind : TokKind
   raw : List Char
-  deriving DecidableEq, Repr, Inhabited, BEq
+  deriving DecidableEq, Repr, Inhabited
 
 /-- The characters a token list covers, in order. -/
 def Token.printList (ts : List Token) : List Char := ts.flatMap Token.raw
