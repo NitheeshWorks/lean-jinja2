@@ -603,6 +603,13 @@ def pParamName (ts : List TokKind) : PR String :=
   | t :: _ => fail s!"expected token 'name', got '{describe t}'" ts
   | [] => fail "unexpected end of template, expected 'name'." ts
 
+/-- A parameter's optional `= default`. -/
+def pParamDefault (n : Nat) (ts : List TokKind) : PR (Option Expr) :=
+  if isOp .assign ts.head? then do
+    let (e, ts) ← pExpr n true ts.tail
+    .ok (some e, ts)
+  else .ok (none, ts)
+
 /-- `parse_signature` after `(`, up to and including `)`. `hadDefault` says
 an earlier parameter had a default. -/
 def pParams : Nat → Bool → List TokKind → PR (List Param)
@@ -611,16 +618,28 @@ def pParams : Nat → Bool → List TokKind → PR (List Param)
     if isOp .rparen ts.head? then .ok ([], ts.tail)
     else do
       let (p, ts) ← pParamName ts
-      let (d, ts) ← if isOp .assign ts.head? then do
-          let (e, ts) ← pExpr n true ts.tail
-          pure (some e, ts)
-        else pure (none, ts)
+      let (d, ts) ← pParamDefault n ts
       if d.isNone && hadDefault then fail "non-default argument follows default argument" ts
       else if isOp .rparen ts.head? then .ok ([(p, d)], ts.tail)
       else do
         let ((), ts) ← expect (.op .comma) ts
         let (more, ts) ← pParams n (hadDefault || d.isSome) ts
         .ok ((p, d) :: more, ts)
+
+/-- An optional `(params)` (call blocks). -/
+def pOptParams (n : Nat) (ts : List TokKind) : PR (List Param) :=
+  if isOp .lparen ts.head? then pParams n false ts.tail else .ok ([], ts)
+
+/-- A `for` loop's optional `if` filter. -/
+def pForFilter (n : Nat) (ts : List TokKind) : PR (Option Expr) :=
+  if isName "if" ts.head? then do
+    let (e, ts) ← pExpr n true ts.tail
+    .ok (some e, ts)
+  else .ok (none, ts)
+
+/-- A separating comma, except before the first item. -/
+def optComma (first : Bool) (ts : List TokKind) : PR Unit :=
+  if first then .ok ((), ts) else expect (.op .comma) ts
 
 /-- A filter chain: `f(args) | g | ...` (`parse_filter`). `first` says the
 first filter needs no leading `|` (`start_inline`). -/
@@ -730,10 +749,7 @@ def pStatement : Nat → TagStack → List TokKind → PR (List Node)
       let (target, r) ← pTarget n ["in"] false r
       let ((), r) ← expect (.name "in") r
       let (iter, r) ← pTuple n false ["recursive"] false r
-      let (filt, r) ← if isName "if" r.head? then do
-          let (e, r) ← pExpr n true r.tail
-          pure (some e, r)
-        else pure (none, r)
+      let (filt, r) ← pForFilter n r
       let (recursive, r) := if isName "recursive" r.head? then (true, r.tail) else (false, r)
       let (body, r) ← pStatements n stack "for" ["endfor", "else"] false r
       if isName "endfor" r.head? then .ok ([.for_ target iter filt recursive body []], r.tail)
@@ -759,7 +775,7 @@ def pStatement : Nat → TagStack → List TokKind → PR (List Node)
       let (body, r) ← pStatements n stack "macro" ["endmacro"] true r
       .ok ([.macro name params body], r)
     | .name "call" :: r => do
-      let (params, r) ← if isOp .lparen r.head? then pParams n false r.tail else pure ([], r)
+      let (params, r) ← pOptParams n r
       let (c, r) ← pExpr n true r
       match c with
       | .call .. => do
@@ -833,7 +849,7 @@ def pWithAssigns : Nat → Bool → List TokKind → PR (List (Target × Expr))
   | n + 1, first, ts =>
     if ts.head? == some .blockEnd then .ok ([], ts)
     else do
-      let ((), ts) ← if first then pure ((), ts) else expect (.op .comma) ts
+      let ((), ts) ← optComma first ts
       let (t, ts) ← pTarget n [] false ts
       let ((), ts) ← expect (.op .assign) ts
       let (e, ts) ← pExpr n true ts
@@ -846,7 +862,7 @@ def pPrintItems : Nat → Bool → List TokKind → PR (List Expr)
   | n + 1, first, ts =>
     if ts.head? == some .blockEnd then .ok ([], ts)
     else do
-      let ((), ts) ← if first then pure ((), ts) else expect (.op .comma) ts
+      let ((), ts) ← optComma first ts
       let (e, ts) ← pExpr n true ts
       let (more, ts) ← pPrintItems n false ts
       .ok (e :: more, ts)
