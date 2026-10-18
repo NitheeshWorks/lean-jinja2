@@ -17,6 +17,29 @@ open Parse
 
 set_option linter.unusedSimpArgs false
 
+@[simp] theorem isOp_op (o p : Op) : isOp o (some (.op p)) = (p == o) := rfl
+@[simp] theorem isOp_none (o : Op) : isOp o none = false := rfl
+@[simp] theorem isOp_name (o : Op) (s : String) : isOp o (some (.name s)) = false := rfl
+@[simp] theorem isOp_str (o : Op) (s : String) : isOp o (some (.str s)) = false := rfl
+@[simp] theorem isOp_int (o : Op) (k : Nat) : isOp o (some (.int k)) = false := rfl
+@[simp] theorem isOp_float (o : Op) (a b : Nat) : isOp o (some (.float a b)) = false := rfl
+@[simp] theorem isOp_data (o : Op) (s : String) : isOp o (some (.data s)) = false := rfl
+@[simp] theorem isOp_varEnd (o : Op) : isOp o (some .varEnd) = false := rfl
+@[simp] theorem isOp_blockEnd (o : Op) : isOp o (some .blockEnd) = false := rfl
+@[simp] theorem isOp_varBegin (o : Op) : isOp o (some .varBegin) = false := rfl
+@[simp] theorem isOp_blockBegin (o : Op) : isOp o (some .blockBegin) = false := rfl
+
+@[simp] theorem isName_name (s t : String) : isName s (some (.name t)) = (t == s) := rfl
+@[simp] theorem isName_none (s : String) : isName s none = false := rfl
+@[simp] theorem isName_op (s : String) (o : Op) : isName s (some (.op o)) = false := rfl
+@[simp] theorem isName_str (s t : String) : isName s (some (.str t)) = false := rfl
+@[simp] theorem isName_int (s : String) (k : Nat) : isName s (some (.int k)) = false := rfl
+@[simp] theorem isName_float (s : String) (a b : Nat) : isName s (some (.float a b)) = false := rfl
+@[simp] theorem isName_data (s t : String) : isName s (some (.data t)) = false := rfl
+@[simp] theorem isName_varEnd (s : String) : isName s (some .varEnd) = false := rfl
+@[simp] theorem isName_blockEnd (s : String) : isName s (some .blockEnd) = false := rfl
+@[simp] theorem isName_blockBegin (s : String) : isName s (some .blockBegin) = false := rfl
+
 /-- The lowest level at which a token continues an expression (99: never). -/
 def contLevel : TokKind → Nat
   | .op .dot | .op .lbracket | .op .lparen | .str _ => 0
