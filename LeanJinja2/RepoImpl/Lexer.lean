@@ -145,7 +145,12 @@ token name descending (`variable_begin`, `comment_begin`, `block_begin`). -/
 def beginOrder (cfg : LexConfig) : List (Nat × String) :=
   -- rank: 2 = variable, 1 = comment, 0 = block
   let ds := [(2, cfg.variableStart), (1, cfg.commentStart), (0, cfg.blockStart)]
-  ds.mergeSort (fun a b => a.2.length > b.2.length || (a.2.length == b.2.length && a.1 ≥ b.1))
+  let le := fun (a b : Nat × String) => a.2.length > b.2.length || (a.2.length == b.2.length && a.1 ≥ b.1)
+  -- a stable insertion sort (the list has three entries)
+  let rec ins (x : Nat × String) : List (Nat × String) → List (Nat × String)
+    | [] => [x]
+    | y :: ys => if le x y then x :: y :: ys else y :: ins x ys
+  ds.foldr ins []
 
 /-- A tag start at the head of `l`, if any. -/
 def tagAt (cfg : LexConfig) (l : List Char) : Option TagStart :=
