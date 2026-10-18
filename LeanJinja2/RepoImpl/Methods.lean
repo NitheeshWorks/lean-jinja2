@@ -87,9 +87,9 @@ def callMethod (fc : FCtx) (recv : Value) (name : String) (args : List Value)
   match recv with
   | .dict kvs =>
     match name with
-    | "items" => pure (.list (kvs.map (fun p => .tuple [p.1, p.2])))
-    | "keys" => pure (.list (kvs.map Prod.fst))
-    | "values" => pure (.list (kvs.map Prod.snd))
+    | "items" => pure (.list (kvs.map (fun p => Value.tuple #[p.1, p.2])).toArray)
+    | "keys" => pure (.list (kvs.map Prod.fst).toArray)
+    | "values" => pure (.list (kvs.map Prod.snd).toArray)
     | "get" =>
       match args with
       | k :: rest => pure ((Value.lookupIn kvs k).getD (rest.head?.getD .none))
@@ -122,11 +122,11 @@ def callMethod (fc : FCtx) (recv : Value) (name : String) (args : List Value)
       let mx ← match a 1 "maxsplit" with
         | none => pure (-1 : Int)
         | some v => intArg v "maxsplit"
-      pure (.list ((splitMax l sep mx).map (fun p => keepKind recv (String.ofList p))))
-    | "splitlines" => pure (.list ((splitLines l).map (fun p => keepKind recv (String.ofList p))))
+      pure (.list ((splitMax l sep mx).map (fun p => keepKind recv (String.ofList p))).toArray)
+    | "splitlines" => pure (.list ((splitLines l).map (fun p => keepKind recv (String.ofList p))).toArray)
     | "startswith" | "endswith" => do
       let ps ← match a 0 "prefix" with
-        | some (.tuple xs) => xs.mapM (strOf pol)
+        | some (.tuple xs) => xs.toList.mapM (strOf pol)
         | some v => do let t ← strOf pol v; pure [t]
         | none => typeErr s!"{name}() takes at least 1 argument (0 given)"
       pure (.bool (ps.any (fun p => if name == "startswith" then s.startsWith p else s.endsWith p)))

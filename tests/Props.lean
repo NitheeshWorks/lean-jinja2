@@ -92,7 +92,7 @@ def genBody : Nat → Rng → List Node × Rng
     let (len, r) := r.nat 4
     genSeq (genNode (genBody d)) len true r
 
-def vars : List (String × Value) := [("s", "a<b"), ("xs", .list [1, 2, 3]), ("n", 0)]
+def vars : List (String × Value) := [("s", "a<b"), ("xs", .list #[1, 2, 3]), ("n", 0)]
 
 def renderTotal : Property where
   name := "render_total on generated templates (executable cross-check)"
@@ -125,7 +125,7 @@ def genInts (r : Rng) : List Int × Rng := Id.run do
   return (out, r)
 
 def intsOf : Value → Option (List Int)
-  | .list xs => xs.mapM (fun | .int i => some i | _ => none)
+  | .list xs => xs.toList.mapM (fun | .int i => some i | _ => none)
   | _ => none
 
 def isSorted : List Int → Bool
@@ -138,7 +138,7 @@ def sortProp : Property where
   name := "sort returns a sorted permutation"
   check r :=
     let (xs, r) := genInts r
-    match applyFilter {} "sort" (.list (xs.map Value.int)) [] [] with
+    match applyFilter {} "sort" (.list (xs.map Value.int).toArray) [] [] with
     | .ok v =>
       match intsOf v with
       | some ys => if isSorted ys && xs.all (fun x => countIn x xs == countIn x ys) && ys.length == xs.length
@@ -151,7 +151,7 @@ def uniqueProp : Property where
   check r :=
     let (xs, r) := genInts r
     let expected := xs.foldl (fun acc x => if acc.contains x then acc else acc ++ [x]) []
-    match applyFilter {} "unique" (.list (xs.map Value.int)) [] [] >>= (fun v => .ok (intsOf v)) with
+    match applyFilter {} "unique" (.list (xs.map Value.int).toArray) [] [] >>= (fun v => .ok (intsOf v)) with
     | .ok (some ys) => if ys == expected then (none, r) else (some s!"{xs} -> {ys}", r)
     | _ => (some s!"failed on {xs}", r)
 
@@ -178,13 +178,13 @@ def sliceProp : Property where
     let opt := fun (o : Option Int) => o.map Value.int
     let vs := xs.map Value.int
     let str := String.ofList (xs.map (fun i => Char.ofNat (97 + (i.toNat % 26))))
-    let gotL := sliceV .default (.list vs) (opt a) (opt b) (opt c)
+    let gotL := sliceV .default (.list vs.toArray) (opt a) (opt b) (opt c)
     let gotS := sliceV .default (.str str) (opt a) (opt b) (opt c)
     let refS := (sliceRef (str.toList.map (fun ch => Value.str (String.singleton ch))) a b c).map
       (fun l => String.join (l.map Value.toStr))
     match gotL, sliceRef vs a b c, gotS, refS with
     | .ok (.list ys), some zs, .ok (.str t), some u =>
-      if ys.map Value.repr == zs.map Value.repr && t == u then (none, r)
+      if ys.toList.map Value.repr == zs.map Value.repr && t == u then (none, r)
       else (some s!"{xs}[{a}:{b}:{c}]", r)
     | _, _, _, _ => (some s!"failed on {xs}[{a}:{b}:{c}]", r)
 
@@ -267,13 +267,52 @@ def randomProp : Property where
     let (seed, r) := r.nat 1000000
     let (xs, r) := genInts r
     let vs := xs.map Value.int
-    match randomChoice .default [] (UInt64.ofNat seed) (.list vs) with
+    match randomChoice .default [] (UInt64.ofNat seed) (.list vs.toArray) with
     | .ok (.int i, _) => if xs.contains i then (none, r) else (some s!"{xs} gave {i}", r)
     | .ok (.undef _, _) => if xs.isEmpty then (none, r) else (some s!"{xs} gave undefined", r)
     | _ => (some s!"{xs} failed", r)
 
+/-- A string of up to 300 characters of 1 to 4 UTF-8 bytes. -/
+def genUnicode (r : Rng) : String × Rng := Id.run do
+  let (n, r) := r.nat 300
+  let mut r := r
+  let mut out : String := ""
+  for _ in [0:n] do
+    let (c, r') := r.pick ['a', 'é', '€', '😀', ' ', 'z', 'ß']
+    r := r'
+    out := out.push c
+  return (out, r)
+
+/-- Python `x[i]` by the definition: normalise, then the `j`-th item. -/
+def indexRef {α : Type} (xs : List α) (i : Int) : Option α :=
+  let j := if i < 0 then i + xs.length else i
+  if j < 0 then none else xs[j.toNat]?
+
+def strViewProp : Property where
+  name := "s[i] through the cached view and x[i] on an array equal indexing by definition"
+  check r :=
+    let (s, r) := genUnicode r
+    let (t, r) := genUnicode r
+    let (k, r) := r.nat 4
+    let (i, r) := r.nat 700
+    let i : Int := (i : Int) - 350
+    let cell := match k with
+      | 0 => []
+      | 1 => strViewCell s
+      | 2 => strViewCell t
+      | _ => [("s", .str s), ("n", .int 0), ("cp", .list #[])]
+    let cell := if k == 3 then [("junk", Value.none)] else cell
+    let want := (indexRef s.toList i).map String.singleton
+    let (got, cell') := strIndexCached cell s i
+    let (again, _) := strIndexCached cell' s i
+    let xs := s.toList.map (fun c => Value.str (String.singleton c))
+    let gotL := (indexList xs.toArray i).map Value.toStr
+    if got == want && again == want && strIndex s i == want &&
+        gotL == (indexRef xs i).map Value.toStr then (none, r)
+    else (some s!"{repr s}[{i}] cell {k}: {got} {again}, want {want}", r)
+
 def properties : List Property := [renderTotal, printParse, sortProp, uniqueProp, sliceProp, trimProp, wordcountProp,
-  centerProp, lipsumProp, randomProp]
+  centerProp, lipsumProp, randomProp, strViewProp]
 
 def main (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 88172645463325252

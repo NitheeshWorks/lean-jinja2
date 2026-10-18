@@ -49,6 +49,12 @@ theorem decCmp_floor {x y : Int × Nat} (h : decCmp x y = .eq) :
   obtain ⟨a, s⟩ := x
   obtain ⟨b, t⟩ := y
   simp only [decCmp, decAlign] at h
+  by_cases hst : s = t
+  · subst hst
+    simp only [if_true] at h
+    show a / 10 ^ s = b / 10 ^ s
+    rw [Int.compare_eq_eq.mp h]
+  simp only [hst, ite_false] at h
   have he : a * 10 ^ (max s t - s) = b * 10 ^ (max s t - t) := by
     exact Int.compare_eq_eq.mp h
   have hs : (10 : Int) ^ max s t = 10 ^ s * 10 ^ (max s t - s) := by
@@ -69,6 +75,8 @@ theorem bkey_of_pyEq {a b : Value} (h : Value.pyEq a b = true) : a.bkey = b.bkey
   rw [Value.pyEq.eq_def] at h
   split at h
   · rfl
+  · simp only [beq_iff_eq] at h; subst h; rfl
+  · simp only [beq_iff_eq] at h; subst h; rfl
   all_goals first
     | (simp [Value.bkey, Value.num?, Value.text?]; done)
     | skip

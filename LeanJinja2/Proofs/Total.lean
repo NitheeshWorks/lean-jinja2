@@ -375,6 +375,11 @@ theorem Safe.applyFilterM' {env : Environment} {fr : Frame} {name : String} {v :
     Safe (applyFilterM env fr name v args kw) (fun _ => True) := by
   unfold applyFilterM; safe_steps
 
+/-- Indexing never runs out of fuel. -/
+theorem Safe.getitemM' {pol : UndefinedPolicy} {v k : Value} :
+    Safe (getitemM pol v k) (fun _ => True) := by
+  unfold getitemM; safe_steps
+
 /-! ## The induction -/
 
 /-- Every renderer function is `Safe` at fuel `n` on what fits in `n`. -/

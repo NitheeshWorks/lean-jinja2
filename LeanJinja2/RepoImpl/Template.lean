@@ -84,7 +84,8 @@ instance : ToValue Bool := ⟨.bool⟩
 instance : ToValue Int := ⟨.int⟩
 instance : ToValue Nat := ⟨fun n => .int n⟩
 instance : ToValue Markup := ⟨.markup⟩
-instance {α : Type} [ToValue α] : ToValue (List α) := ⟨fun xs => .list (xs.map ToValue.toValue)⟩
+instance {α : Type} [ToValue α] : ToValue (List α) := ⟨fun xs => .list (xs.map ToValue.toValue).toArray⟩
+instance {α : Type} [ToValue α] : ToValue (Array α) := ⟨fun xs => .list (xs.map ToValue.toValue)⟩
 instance {α : Type} [ToValue α] : ToValue (Option α) := ⟨fun o => (o.map ToValue.toValue).getD .none⟩
 instance {α : Type} [ToValue α] : ToValue (List (String × α)) :=
   ⟨fun kvs => .dict (kvs.map (fun p => (.str p.1, ToValue.toValue p.2)))⟩

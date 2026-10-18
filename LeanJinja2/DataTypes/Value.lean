@@ -57,8 +57,9 @@ inductive Value where
   | float (m : Int) (s : Nat)
   | str (s : String)
   | markup (m : Markup)
-  | list (items : List Value)
-  | tuple (items : List Value)
+  /-- A list, array-backed: `x[i]` and `len(x)` take constant time. -/
+  | list (items : Array Value)
+  | tuple (items : Array Value)
   /-- An insertion-ordered mapping. -/
   | dict (items : List (Value × Value))
   /-- A macro: name, parameters, body, whether it uses `caller`, the
@@ -83,7 +84,7 @@ inductive Value where
   | module (name : String) (exports : List (String × Value)) (output : String)
   /-- A named tuple of class `cls` (upstream `groupby`'s `_GroupTuple`): a
   tuple whose items are also attributes named by `fields`. -/
-  | namedTuple (cls : String) (fields : List String) (items : List Value)
+  | namedTuple (cls : String) (fields : List String) (items : Array Value)
   /-- A `cycler(...)` object (upstream `Cycler`), by heap address: the cell
   holds `items` and `pos`. -/
   | cycler (addr : Nat)

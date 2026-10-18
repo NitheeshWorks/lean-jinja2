@@ -131,7 +131,7 @@ def big : List Bench := [
     ok := rendersLen (2000000 / 20 * 2), boundMs := 5000 } ]
 
 /-- `0, 1, ..., n - 1` as a list value. -/
-def intsV (n : Nat) (m : Nat := n) : Value := .list ((List.range n).map (fun i => .int ((i % m : Nat) : Int)))
+def intsV (n : Nat) (m : Nat := n) : Value := .list ((Array.range n).map (fun i => Value.int ((i % m : Nat) : Int)))
 
 def rendersText (t : String) : Except TemplateError String → Bool
   | .ok s => s == t
@@ -189,8 +189,23 @@ def globalOps : List Bench := [
       render "{% for i in range(100000) %}{{ x|random }}{% endfor %}" [("x", intsV 10)] u,
     ok := rendersLen 100000, boundMs := 700 } ]
 
+/-- `x[i]` in a loop over every position: constant time per index. -/
+def indexOps : List Bench := [
+  { name := "x[i] for every i of 10^5 items",
+    run := fun u => render "{% for i in range(100000) %}{% if x[i] == i %}.{% endif %}{% endfor %}"
+      [("x", intsV 100000)] u,
+    ok := rendersLen 100000, boundMs := 300 },
+  { name := "s[i] for every i of a 10^5-char string",
+    run := fun u => render "{% for i in range(100000) %}{{ s[i] }}{% endfor %}"
+      [("s", .str (rep 10000 "abcdefghij"))] u,
+    ok := rendersLen 100000, boundMs := 300 },
+  { name := "s[-i - 1] for every i of a 10^5-char non-ASCII string",
+    run := fun u => render "{% for i in range(100000) %}{{ s[-i - 1] }}{% endfor %}"
+      [("s", .str (rep 10000 "abcdéfghi€"))] u,
+    ok := rendersLen 100000, boundMs := 300 } ]
+
 def benches : List Bench :=
-  big ++ valueOps ++ globalOps ++ sized 10000 2000 ++ sized 100000 20000 ++ [
+  big ++ valueOps ++ globalOps ++ indexOps ++ sized 10000 2000 ++ sized 100000 20000 ++ [
   { name := "range(100000000)", run := render "{{ range(100000000)|length }}", ok := isOverflow,
     boundMs := 100 },
   { name := "range(100000) loop", run := render "{% for i in range(100000) %}.{% endfor %}",
@@ -232,6 +247,14 @@ def probe (phase : String) (n : Nat) : IO UInt32 := do
     | "var" => match render "{{ x }}" [("x", .str src)] () with
       | .ok s => s!"{s.length} chars" | .error e => toString e
     | "gen" => s!"{src.length} chars"
+    | "loop" => match render s!"\{% for i in range({n}) %}.\{% endfor %}" [] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "xi" => match render s!"\{% for i in range({n}) %}\{% if x[i] == i %}.\{% endif %}\{% endfor %}"
+          [("x", intsV n)] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "si" => match render s!"\{% for i in range({n}) %}\{\{ s[i] }}\{% endfor %}"
+          [("s", .str (rep (n / 10) "abcdefghij"))] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
     | "linecomment" => match renderL (commented n) [] () with
       | .ok s => s!"{s.length} chars" | .error e => toString e
     | "linestmt" => match renderL (lineStmts n) [] () with
@@ -249,6 +272,13 @@ def probe (phase : String) (n : Nat) : IO UInt32 := do
 
 /-- Reset the peak resident memory (Linux; does nothing elsewhere). -/
 def main (args : List String) : IO UInt32 := do
+  if let "probe" :: "tpl" :: src :: _ := args then
+    -- an ad-hoc template, with `x` 10^5 ints and `s` a 10^5-char string
+    let t0 ← IO.monoMsNow
+    let r := render src [("x", intsV 100000), ("s", .str (rep 10000 "abcdefghij"))] ()
+    let what := match r with | .ok s => s!"{s.length} chars" | .error e => toString e
+    IO.println s!"{what} in {(← IO.monoMsNow) - t0} ms"
+    return 0
   if let "probe" :: phase :: n :: _ := args then
     return ← probe phase (n.toNat?.getD 1000000)
   let mut failures := 0

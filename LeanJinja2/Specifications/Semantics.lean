@@ -53,15 +53,15 @@ def filterLaws : Prop :=
   ∀ (fc : FCtx),
     (∀ s, applyFilter fc "upper" (.str s) [] [] = .ok (.str (strUpper s))) ∧
     (∀ s, applyFilter fc "lower" (.str s) [] [] = .ok (.str (strLower s))) ∧
-    (∀ xs, applyFilter fc "length" (.list xs) [] [] = .ok (.int xs.length)) ∧
+    (∀ xs : List Value, applyFilter fc "length" (.list xs.toArray) [] [] = .ok (.int xs.length)) ∧
     (∀ i d, applyFilter fc "default" (.undef i) [d] [] = .ok d) ∧
     (∀ v d, v.isUndef = false → applyFilter fc "default" v [d] [] = .ok v) ∧
     (∀ s, applyFilter fc "escape" (.str s) [] [] = .ok (.markup (escape s))) ∧
     (∀ m, applyFilter fc "escape" (.markup m) [] [] = .ok (.markup m)) ∧
     (∀ s, applyFilter fc "safe" (.str s) [] [] = .ok (.markup (Markup.markSafe s))) ∧
-    (∀ x xs, applyFilter fc "first" (.list (x :: xs)) [] [] = .ok x) ∧
-    (∀ xs x, applyFilter fc "last" (.list (xs ++ [x])) [] [] = .ok x) ∧
-    (∀ xs, applyFilter fc "reverse" (.list xs) [] [] = .ok (.list xs.reverse))
+    (∀ (x : Value) (xs : List Value), applyFilter fc "first" (.list (x :: xs).toArray) [] [] = .ok x) ∧
+    (∀ (xs : List Value) x, applyFilter fc "last" (.list (xs ++ [x]).toArray) [] [] = .ok x) ∧
+    (∀ xs : List Value, applyFilter fc "reverse" (.list xs.toArray) [] [] = .ok (.list xs.reverse.toArray))
 
 /-- `tojson_htmlsafe`: `tojson` returns markup with no raw `<`, `>`, `&`, `'`. -/
 def tojsonHtmlsafe : Prop :=

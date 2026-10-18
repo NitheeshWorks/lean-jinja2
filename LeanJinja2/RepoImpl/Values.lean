@@ -23,6 +23,7 @@ def decNorm : Int → Nat → Int × Nat
 
 /-- Bring two decimals to a common scale. -/
 def decAlign (a : Int × Nat) (b : Int × Nat) : Int × Int × Nat :=
+  if a.2 = b.2 then (a.1, b.1, a.2) else
   let s := max a.2 b.2
   (a.1 * 10 ^ (s - a.2), b.1 * 10 ^ (s - b.2), s)
 
@@ -234,9 +235,9 @@ def Value.repr : Value → String
   | .float m s => decRepr m s
   | .str s => pyStrRepr s
   | .markup m => "Markup(" ++ pyStrRepr m.str ++ ")"
-  | .list xs => "[" ++ Value.reprList xs ++ "]"
-  | .tuple [x] => "(" ++ x.repr ++ ",)"
-  | .tuple xs => "(" ++ Value.reprList xs ++ ")"
+  | .list ⟨xs⟩ => "[" ++ Value.reprList xs ++ "]"
+  | .tuple ⟨[x]⟩ => "(" ++ x.repr ++ ",)"
+  | .tuple ⟨xs⟩ => "(" ++ Value.reprList xs ++ ")"
   | .dict kvs => "{" ++ Value.reprPairs kvs ++ "}"
   | .macro n .. => s!"<Macro '{n}'>"
   | .native n => s!"<function {n}>"
@@ -245,8 +246,8 @@ def Value.repr : Value → String
   | .superRef n _ => s!"<BlockReference '{n}'>"
   | .ns a => s!"<Namespace {a}>"
   | .module n .. => s!"<TemplateModule {pyStrRepr n}>"
-  | .namedTuple _ _ [x] => "(" ++ x.repr ++ ",)"
-  | .namedTuple _ _ xs => "(" ++ Value.reprList xs ++ ")"
+  | .namedTuple _ _ ⟨[x]⟩ => "(" ++ x.repr ++ ",)"
+  | .namedTuple _ _ ⟨xs⟩ => "(" ++ Value.reprList xs ++ ")"
   | .cycler _ => "<jinja2.utils.Cycler object>"
   | .joiner _ => "<jinja2.utils.Joiner object>"
 
@@ -268,11 +269,11 @@ The `Acc` versions append to an accumulator instead, and `repr_eq_acc` (a
 
 mutual
 def Value.reprAcc (acc : String) : Value → String
-  | .list xs => Value.reprListAcc (acc ++ "[") xs ++ "]"
-  | .tuple [x] => Value.reprAcc (acc ++ "(") x ++ ",)"
-  | .tuple xs => Value.reprListAcc (acc ++ "(") xs ++ ")"
-  | .namedTuple _ _ [x] => Value.reprAcc (acc ++ "(") x ++ ",)"
-  | .namedTuple _ _ xs => Value.reprListAcc (acc ++ "(") xs ++ ")"
+  | .list ⟨xs⟩ => Value.reprListAcc (acc ++ "[") xs ++ "]"
+  | .tuple ⟨[x]⟩ => Value.reprAcc (acc ++ "(") x ++ ",)"
+  | .tuple ⟨xs⟩ => Value.reprListAcc (acc ++ "(") xs ++ ")"
+  | .namedTuple _ _ ⟨[x]⟩ => Value.reprAcc (acc ++ "(") x ++ ",)"
+  | .namedTuple _ _ ⟨xs⟩ => Value.reprListAcc (acc ++ "(") xs ++ ")"
   | .dict kvs => Value.reprPairsAcc (acc ++ "{") kvs ++ "}"
   | v => acc ++ v.repr
 
@@ -289,20 +290,20 @@ end
 
 mutual
 theorem Value.reprAcc_eq : ∀ (acc : String) (v : Value), Value.reprAcc acc v = acc ++ v.repr
-  | acc, .list xs => by
+  | acc, .list ⟨xs⟩ => by
     rw [Value.reprAcc, Value.reprListAcc_eq]; simp [Value.repr, String.append_assoc]
-  | acc, .tuple [] => by simp [Value.reprAcc, Value.reprListAcc, Value.repr, Value.reprList, String.append_assoc]
-  | acc, .tuple [x] => by
+  | acc, .tuple ⟨[]⟩ => by simp [Value.reprAcc, Value.reprListAcc, Value.repr, Value.reprList, String.append_assoc]
+  | acc, .tuple ⟨[x]⟩ => by
     rw [Value.reprAcc, Value.reprAcc_eq]; simp [Value.repr, String.append_assoc]
-  | acc, .tuple (x :: y :: ys) => by
+  | acc, .tuple ⟨x :: y :: ys⟩ => by
     rw [Value.reprAcc, Value.reprListAcc_eq]
     · simp [Value.repr, String.append_assoc]
     · intro z h; simp at h
-  | acc, .namedTuple _ _ [] => by
+  | acc, .namedTuple _ _ ⟨[]⟩ => by
     simp [Value.reprAcc, Value.reprListAcc, Value.repr, Value.reprList, String.append_assoc]
-  | acc, .namedTuple _ _ [x] => by
+  | acc, .namedTuple _ _ ⟨[x]⟩ => by
     rw [Value.reprAcc, Value.reprAcc_eq]; simp [Value.repr, String.append_assoc]
-  | acc, .namedTuple _ _ (x :: y :: ys) => by
+  | acc, .namedTuple _ _ ⟨x :: y :: ys⟩ => by
     rw [Value.reprAcc, Value.reprListAcc_eq]
     · simp [Value.repr, String.append_assoc]
     · intro z h; simp at h
@@ -412,9 +413,11 @@ mutual
 /-- Python `==` on defined values. -/
 def Value.pyEq : Value → Value → Bool
   | .none, .none => true
-  | .list xs, .list ys => Value.pyEqList xs ys
-  | .tuple xs, .tuple ys | .namedTuple _ _ xs, .namedTuple _ _ ys
-  | .tuple xs, .namedTuple _ _ ys | .namedTuple _ _ xs, .tuple ys => Value.pyEqList xs ys
+  | .int a, .int b => a == b
+  | .str a, .str b => a == b
+  | .list ⟨xs⟩, .list ⟨ys⟩ => Value.pyEqList xs ys
+  | .tuple ⟨xs⟩, .tuple ⟨ys⟩ | .namedTuple _ _ ⟨xs⟩, .namedTuple _ _ ⟨ys⟩
+  | .tuple ⟨xs⟩, .namedTuple _ _ ⟨ys⟩ | .namedTuple _ _ ⟨xs⟩, .tuple ⟨ys⟩ => Value.pyEqList xs ys
   | .cycler a, .cycler b | .joiner a, .joiner b => a == b
   | .dict a, .dict b => a.length == b.length && Value.pyDictSub a b
   | .undef _, .undef _ => true
@@ -456,9 +459,9 @@ def Value.lookupIn : List (Value × Value) → Value → Option Value
 mutual
 /-- Python ordering, or a `TypeError` message. -/
 def Value.pyCmp : Value → Value → Except String Ordering
-  | .list xs, .list ys => Value.pyCmpList xs ys
-  | .tuple xs, .tuple ys | .namedTuple _ _ xs, .namedTuple _ _ ys
-  | .tuple xs, .namedTuple _ _ ys | .namedTuple _ _ xs, .tuple ys => Value.pyCmpList xs ys
+  | .list ⟨xs⟩, .list ⟨ys⟩ => Value.pyCmpList xs ys
+  | .tuple ⟨xs⟩, .tuple ⟨ys⟩ | .namedTuple _ _ ⟨xs⟩, .namedTuple _ _ ⟨ys⟩
+  | .tuple ⟨xs⟩, .namedTuple _ _ ⟨ys⟩ | .namedTuple _ _ ⟨xs⟩, .tuple ⟨ys⟩ => Value.pyCmpList xs ys
   | a, b =>
     match a.num?, b.num? with
     | some x, some y => .ok (decCmp x y)

@@ -44,8 +44,9 @@ def rngOf (seed : Nat) (heap : Heap) : UInt64 :=
   | some (.int i) => UInt64.ofNat i.toNat
   | _ => UInt64.ofNat seed
 
-/-- The heap a render starts from: cell `0` is the generator. -/
-def initHeap (seed : Nat) : Heap := [[("state", .int (UInt64.ofNat seed).toNat)]]
+/-- The heap a render starts from: cell `0` is the generator, cell `1` the
+view of the last string indexed (`StrIndex`). -/
+def initHeap (seed : Nat) : Heap := [[("state", .int (UInt64.ofNat seed).toNat)], []]
 
 /-- Upstream `do_random(seq)`: `random.choice(seq)`, or an undefined value
 for an empty sequence. -/

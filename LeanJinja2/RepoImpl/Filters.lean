@@ -493,8 +493,8 @@ def Filters.batch (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
         | some f => if c.length < k && (match f with | .none => false | _ => true)
             then c ++ List.replicate (k - c.length) f else c
         | none => c
-      .list c :: chunks fuel (ys.drop k)
-  pure (.list (chunks (xs.length + 1) xs))
+      .list c.toArray :: chunks fuel (ys.drop k)
+  pure (.list (chunks (xs.length + 1) xs).toArray)
 
 /-- Upstream filter `capitalize`. -/
 def Filters.capitalize (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -553,7 +553,7 @@ def Filters.dictsort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List 
     let key := fun (p : Value × Value) => let x := if pos == 0 then p.1 else p.2
       if cs then x else ignoreCase x
     let sorted ← sortBy (fun p q => if rev then pyLe (key q) (key p) else pyLe (key p) (key q)) kvs
-    pure (.list (sorted.map (fun p => .tuple [p.1, p.2])))
+    pure (.list (sorted.map (fun p => Value.tuple #[p.1, p.2])).toArray)
   | .undef i => failUndef i
   | _ => typeErr "dictsort requires a mapping"
 
@@ -614,7 +614,7 @@ def Filters.format (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
     .error (.runtime "can't handle positional and keyword arguments at the same time")
   else
     let packed : Value := if !kwargs.isEmpty then .dict (kwargs.map (fun p => (.str p.1, p.2)))
-      else .tuple args
+      else .tuple args.toArray
     match v with
     | .markup m => do let r ← pctFormat pol true m.str packed; pure (.markup (Markup.markSafe r))
     | _ => do let s ← strOf pol v; let r ← pctFormat pol false s packed; pure (.str r)
@@ -646,8 +646,8 @@ def Filters.groupby (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
       do
         let shown ← if cs then pure k else attrGet fc attr dflt x
         let more ← groups fuel others
-        pure (.namedTuple "_GroupTuple" ["grouper", "list"] [shown, .list members] :: more)
-  pure (.list (← groups (sorted.length + 1) sorted))
+        pure (.namedTuple "_GroupTuple" ["grouper", "list"] #[shown, .list members.toArray] :: more)
+  pure (.list (← groups (sorted.length + 1) sorted).toArray)
 
 /-- Upstream filter `indent`. -/
 def Filters.indent (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -689,8 +689,8 @@ def Filters.items (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
     Except ValueError Value := do
   let a := argAt args kwargs
   match v with
-  | .undef _ => pure (.list [])
-  | .dict kvs => pure (.list (kvs.map (fun p => .tuple [p.1, p.2])))
+  | .undef _ => pure (.list #[])
+  | .dict kvs => pure (.list (kvs.map (fun p => Value.tuple #[p.1, p.2])).toArray)
   | _ => typeErr "Can only get item pairs from a mapping."
 
 /-- Upstream filter `join`. -/
@@ -720,7 +720,7 @@ def Filters.list (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
     Except ValueError Value := do
   let pol := fc.pol
   let iter := fun (x : Value) => iterOf pol fc.heap x
-  do let xs ← iter v; pure (.list xs)
+  do let xs ← iter v; pure (.list xs.toArray)
 
 /-- Upstream filter `lower`. -/
 def Filters.lower (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -748,12 +748,12 @@ def Filters.map (apply : String → Value → List Value → List (String × Val
     let dflt := kwargs.lookup "default"
     match (kwargs.filter (fun p => p.1 != "attribute" && p.1 != "default")).head? with
     | some (k, _) => .error (.runtime s!"Unexpected keyword argument {pyStrRepr k}")
-    | none => do let ys ← xs.mapM (attrGet fc at_ dflt); pure (.list ys)
+    | none => do let ys ← xs.mapM (attrGet fc at_ dflt); pure (.list ys.toArray)
   else
     match args with
     | .str fname :: rest => do
       let ys ← xs.mapM (fun x => apply fname x rest kwargs)
-      pure (.list ys)
+      pure (.list ys.toArray)
     | _ => .error (.runtime "map requires a filter argument")
 
 /-- Upstream filter `min`, `max`. -/
@@ -792,7 +792,7 @@ def Filters.select (lookupAttr keep : Bool) (fc : FCtx) (v : Value) (args : List
   let iter := fun (x : Value) => iterOf pol fc.heap x
   do
   let t0 ← truthyOf pol v
-  if !t0 then pure (.list []) else
+  if !t0 then pure (.list #[]) else
   let xs ← iter v
   let (attr, rest) := if lookupAttr then (args.head?, args.drop 1) else (none, args)
   if lookupAttr && attr.isNone then .error (.runtime "Missing parameter for attribute name") else
@@ -804,7 +804,7 @@ def Filters.select (lookupAttr keep : Bool) (fc : FCtx) (v : Value) (args : List
       | .str tname :: targs => applyTest fc tname y targs kwargs
       | _ => truthyOf pol y
     pure (r == keep))
-  pure (.list ys)
+  pure (.list ys.toArray)
 
 /-- Upstream filter `replace`. -/
 def Filters.replace (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -844,7 +844,7 @@ def Filters.reverse (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
   match v with
   | .str s => pure (.str (String.ofList s.toList.reverse))
   | .markup m => pure (.markup (Markup.markSafe (String.ofList m.str.toList.reverse)))
-  | _ => do let xs ← iter v; pure (.list xs.reverse)
+  | _ => do let xs ← iter v; pure (.list xs.reverse.toArray)
 
 /-- Upstream filter `round`. -/
 def Filters.round (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -898,8 +898,8 @@ def Filters.slice (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
         | some f => if i ≥ extra && (match f with | .none => false | _ => true)
             then tmp ++ [f] else tmp
         | none => tmp
-      build fuel (i + 1) off' (rest.drop (stop - start)) (.list tmp :: acc)
-  pure (.list (build (k + 1) 0 0 seq []))
+      build fuel (i + 1) off' (rest.drop (stop - start)) (.list tmp.toArray :: acc)
+  pure (.list (build (k + 1) 0 0 seq []).toArray)
 
 /-- Upstream filter `sort`. -/
 def Filters.sort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -918,9 +918,9 @@ def Filters.sort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (Str
     | x => [x]
   let keyed ← xs.mapM (fun x => do
     let ks ← attrs.mapM (fun at_ => attrGet fc at_ none x)
-    pure (Value.list (if cs then ks else ks.map ignoreCase), x))
+    pure (Value.list (if cs then ks else ks.map ignoreCase).toArray, x))
   let sorted ← sortBy (fun p q => if rev then pyLe q.1 p.1 else pyLe p.1 q.1) keyed
-  pure (.list (sorted.map Prod.snd))
+  pure (.list (sorted.map Prod.snd).toArray)
 
 /-- Upstream filter `string`. -/
 def Filters.string (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -1021,7 +1021,7 @@ def Filters.unique (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
   let out ← uniqueSpec (fun x => do
     let k ← attrGet fc attr none x
     pure (if cs then k else ignoreCase k)) xs
-  pure (.list out)
+  pure (.list out.toArray)
 
 /-- Upstream filter `urlencode`. -/
 def Filters.urlencode (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -1037,12 +1037,12 @@ def Filters.urlencode (fc : FCtx) (v : Value) (args : List Value) (kwargs : List
   | .list xs | .tuple xs | .namedTuple _ _ xs => do
     let parts ← xs.mapM (fun p => do
       match p with
-      | .tuple [k, x] | .list [k, x] | .namedTuple _ _ [k, x] => do
+      | .tuple ⟨[k, x]⟩ | .list ⟨[k, x]⟩ | .namedTuple _ _ ⟨[k, x]⟩ => do
         let k ← strOf pol k
         let x ← strOf pol x
         pure (urlQuote k true ++ "=" ++ urlQuote x true)
       | _ => typeErr "urlencode requires (key, value) pairs")
-    pure (.str ("&".intercalate parts))
+    pure (.str ("&".intercalate parts.toList))
   | _ => do let s ← strOf pol v; pure (.str (urlQuote s false))
 
 /-- Upstream filter `wordcount`. -/

@@ -33,7 +33,7 @@ theorem filter_lower (fc : FCtx) (s : String) :
   rfl
 
 theorem filter_length (fc : FCtx) (xs : List Value) :
-    applyFilter fc "length" (.list xs) [] [] = .ok (.int xs.length) := by
+    applyFilter fc "length" (.list xs.toArray) [] [] = .ok (.int xs.length) := by
   rw [applyFilter_builtin (f := Filters.length) (fun _ => by simp [builtinFilterTable, List.lookup])]
   rfl
 
@@ -69,27 +69,27 @@ theorem filter_safe (fc : FCtx) (s : String) :
   rfl
 
 theorem filter_first (fc : FCtx) (x : Value) (xs : List Value) :
-    applyFilter fc "first" (.list (x :: xs)) [] [] = .ok x := by
+    applyFilter fc "first" (.list (x :: xs).toArray) [] [] = .ok x := by
   rw [applyFilter_builtin (f := Filters.first) (fun _ => by simp [builtinFilterTable, List.lookup])]
   rfl
 
 theorem filter_last (fc : FCtx) (xs : List Value) (x : Value) :
-    applyFilter fc "last" (.list (xs ++ [x])) [] [] = .ok x := by
+    applyFilter fc "last" (.list (xs ++ [x]).toArray) [] [] = .ok x := by
   rw [applyFilter_builtin (f := Filters.last) (fun _ => by simp [builtinFilterTable, List.lookup])]
   simp [Filters.last, iterOf, pure, Except.pure, bind, Except.bind]
 
 theorem filter_list (fc : FCtx) (xs : List Value) :
-    applyFilter fc "list" (.list xs) [] [] = .ok (.list xs) := by
+    applyFilter fc "list" (.list xs.toArray) [] [] = .ok (.list xs.toArray) := by
   rw [applyFilter_builtin (f := Filters.list) (fun _ => by simp [builtinFilterTable, List.lookup])]
   rfl
 
 theorem filter_reverse (fc : FCtx) (xs : List Value) :
-    applyFilter fc "reverse" (.list xs) [] [] = .ok (.list xs.reverse) := by
+    applyFilter fc "reverse" (.list xs.toArray) [] [] = .ok (.list xs.reverse.toArray) := by
   rw [applyFilter_builtin (f := Filters.reverse) (fun _ => by simp [builtinFilterTable, List.lookup])]
   rfl
 
 theorem filter_join (fc : FCtx) (ss : List String) (sep : String) (hae : fc.autoescape = false) :
-    applyFilter fc "join" (.list (ss.map Value.str)) [.str sep] [] = .ok (.str (sep.intercalate ss)) := by
+    applyFilter fc "join" (.list (ss.map Value.str).toArray) [.str sep] [] = .ok (.str (sep.intercalate ss)) := by
   rw [applyFilter_builtin (f := Filters.join) (fun _ => by simp [builtinFilterTable, List.lookup])]
   simp only [Filters.join, iterOf, argAt, bind, Except.bind, pure, Except.pure, joinFilter, hae]
   have : ∀ ss : List String, (ss.map Value.str).mapM (strOf fc.pol) = .ok ss := by

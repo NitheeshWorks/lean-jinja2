@@ -4,6 +4,7 @@ import LeanJinja2.RepoImpl.Parser
 import LeanJinja2.RepoImpl.AstWalk
 import LeanJinja2.RepoImpl.Depth
 import LeanJinja2.RepoImpl.Methods
+import LeanJinja2.RepoImpl.StrIndex
 
 /-!
 # The renderer
@@ -148,6 +149,21 @@ decreasing_by simp_wf; have := List.sizeOf_lt_of_mem ‹_›; omega
 /-- Update one attribute of a namespace object. -/
 def heapSet (heap : Heap) (addr : Nat) (k : String) (v : Value) : Heap :=
   heap.set addr ((k, v) :: ((heap[addr]?).getD []).filter (·.1 != k))
+
+/-- `v[k]` (`getitemV`); indexing a string goes through the view of heap
+cell 1 (`StrIndex`), so a loop indexing one string is linear. -/
+def getitemM (pol : UndefinedPolicy) (v k : Value) : RenderM Value := do
+  let h ← get
+  match v, k with
+  | .str s, .int i => do
+    let (r, cell) := strIndexCached ((h[1]?).getD []) s i
+    set (h.set 1 cell)
+    pure (itemOr h v k (r.map Value.str))
+  | .markup m, .int i => do
+    let (r, cell) := strIndexCached ((h[1]?).getD []) m.str i
+    set (h.set 1 cell)
+    pure (itemOr h v k (r.map (fun t => .markup (Markup.markSafe t))))
+  | _, _ => liftR (getitemV pol h v k)
 
 /-- Store the random source's state (heap cell `0`). -/
 def setRng (heap : Heap) (s : UInt64) : Heap := heapSet heap 0 "state" (.int s.toNat)
@@ -315,7 +331,7 @@ def rangeFn (args : List Value) : Except ValueError Value := do
   if count > maxRange then
     .error (.overflow s!"Range too big. The sandbox blocks ranges larger than MAX_RANGE ({maxRange}).")
   else
-  pure (.list ((List.range count).map (fun (k : Nat) => .int (a + (k : Int) * c))))
+  pure (.list ((Array.range count).map (fun (k : Nat) => Value.int (a + (k : Int) * c))))
 
 /-- A mapping argument's entries (`dict(m)`, `namespace(m)`). -/
 def mappingEntries (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (List (Value × Value))
@@ -323,7 +339,7 @@ def mappingEntries (pol : UndefinedPolicy) (heap : Heap) : Value → Except Valu
   | v => do
     let xs ← iterOf pol heap v
     xs.mapM fun x => match x with
-      | .tuple [k, y] | .list [k, y] | .namedTuple _ _ [k, y] => .ok (k, y)
+      | .tuple ⟨[k, y]⟩ | .list ⟨[k, y]⟩ | .namedTuple _ _ ⟨[k, y]⟩ => .ok (k, y)
       | _ => .error (.typeError "dictionary update sequence element has wrong length")
 
 /-- One comparison of a chain. -/
@@ -366,8 +382,8 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
           if i + 1 < (fr.chain b).length then pure (.superRef b (i + 1))
           else pure (.undef (.hint s!"there is no parent block called '{b}'."))
         | _, _ => pure (.undef (.name x))
-    | .tuple xs => do let vs ← xs.mapM (evalE env n fr); pure (.tuple vs)
-    | .list xs => do let vs ← xs.mapM (evalE env n fr); pure (.list vs)
+    | .tuple xs => do let vs ← xs.mapM (evalE env n fr); pure (.tuple vs.toArray)
+    | .list xs => do let vs ← xs.mapM (evalE env n fr); pure (.list vs.toArray)
     | .dict ps => do
       let vs ← ps.mapM (fun p => do
         let k ← evalE env n fr p.1
@@ -392,8 +408,7 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
     | .getitem x i => do
       let v ← evalE env n fr x
       let k ← evalE env n fr i
-      let h ← get
-      liftR (getitemV pol h v k)
+      getitemM pol v k
     | .slice .. => throw (.typeError "a slice is only valid in a subscript")
     | .call f args kw => do
       let fv ← evalE env n fr f
@@ -504,7 +519,7 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
       | [], [] => throw (.typeError "at least one item has to be provided")
       | [], _ => do
         let h ← get
-        set (h ++ [[("items", .tuple args), ("pos", .int 0)]])
+        set (h ++ [[("items", .tuple args.toArray), ("pos", .int 0)]])
         pure (.cycler h.length)
     | .native "joiner" => do
       let sep ← match args, kw with
@@ -529,7 +544,7 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
       | none => throw (.typeError s!"'{nm}' is not callable")
     | .method (.loop _ _ _ _ _ _ cell) "changed" => do
       let h ← get
-      let cur := Value.tuple args
+      let cur := Value.tuple args.toArray
       let last := ((h[cell]?).getD []).lookup "last"
       match last with
       | some l => if Value.pyEq l cur then pure (.bool false) else do
@@ -542,7 +557,7 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
       let cell := (h[a]?).getD []
       match m, cell.lookup "items", cell.lookup "pos" with
       | "next", some (.tuple xs), some (.int p) => do
-        set (heapSet h a "pos" (.int ((p + 1) % xs.length)))
+        set (heapSet h a "pos" (.int ((p + 1) % xs.size)))
         pure (xs[p.toNat]?.getD .none)
       | "reset", _, _ => do set (heapSet h a "pos" (.int 0)); pure .none
       | _, _, _ => throw (.typeError s!"'Cycler' object has no attribute '{m}'")
@@ -610,7 +625,7 @@ def callMacro (env : Environment) : Nat → Frame → String → List Param → 
             throw (.typeError s!"macro '{nm}' was invoked with two values for the special caller argument. This is most likely a bug.")
           else throw (.typeError s!"macro '{nm}' takes no keyword argument '{k}'")
     let bound ←
-      if mentionsName "varargs" body then pure (("varargs", .tuple extra) :: bound)
+      if mentionsName "varargs" body then pure (("varargs", .tuple extra.toArray) :: bound)
       else if extra.isEmpty then pure bound
       else throw (.typeError s!"macro '{nm}' takes not more than {ps.length} argument(s)")
     let (pieces, _) ← renderNodes env n { base with locals := bound ++ clo } body

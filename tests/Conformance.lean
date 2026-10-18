@@ -74,8 +74,8 @@ def isOverflow : TemplateError → Bool
 def msgHas (sub : String) : TemplateError → Bool
   | e => ((toString e).splitOn sub).length > 1
 
-def ints (ns : List Int) : Value := .list (ns.map Value.int)
-def strs (ss : List String) : Value := .list (ss.map Value.str)
+def ints (ns : List Int) : Value := .list (ns.map Value.int).toArray
+def strs (ss : List String) : Value := .list (ss.map Value.str).toArray
 def obj (kvs : List (String × Value)) : Value := Value.ofDict kvs
 def range' (n : Nat) : Value := ints ((List.range n).map (fun (k : Nat) => (k : Int)))
 
@@ -161,7 +161,7 @@ def filterCases : List Case := [
   renders (F ++ "test_join[autoescape]") "{{ [\"<foo>\", \"<span>foo</span>\"|safe]|join }}"
     "&lt;foo&gt;<span>foo</span>" (env := ae),
   renders (F ++ "test_join_attribute") "{{ users|join(', ', 'username') }}" "foo, bar"
-    [("users", .list [obj [("username", "foo")], obj [("username", "bar")]])],
+    [("users", .list #[obj [("username", "foo")], obj [("username", "bar")]])],
   renders (F ++ "test_last") "{{ foo|last }}" "9" [("foo", range' 10)],
   renders (F ++ "test_length") "{{ \"hello world\"|length }}" "11",
   renders (F ++ "test_lower") "{{ \"FOO\"|lower }}" "foo",
@@ -187,9 +187,9 @@ def filterCases : List Case := [
   renders (F ++ "test_chaining") "{{ ['<foo>', '<bar>']|first|upper|escape }}" "&lt;FOO&gt;",
   renders (F ++ "test_sum") "{{ [1, 2, 3, 4, 5, 6]|sum }}" "21",
   renders (F ++ "test_sum_attributes") "{{ values|sum('value') }}" "42"
-    [("values", .list [obj [("value", 23)], obj [("value", 1)], obj [("value", 18)]])],
+    [("values", .list #[obj [("value", 23)], obj [("value", 1)], obj [("value", 18)]])],
   renders (F ++ "test_sum_attributes_nested") "{{ values|sum('real.value') }}" "42"
-    [("values", .list [obj [("real", obj [("value", 23)])], obj [("real", obj [("value", 1)])],
+    [("values", .list #[obj [("real", obj [("value", 23)])], obj [("real", obj [("value", 1)])],
       obj [("real", obj [("value", 18)])]])],
   renders (F ++ "test_sum_attributes_tuple") "{{ values.items()|sum('1') }}" "42"
     [("values", obj [("foo", 23), ("bar", 1), ("baz", 18)])],
@@ -207,22 +207,22 @@ def filterCases : List Case := [
   renders (F ++ "test_sort2") "{{ \"\".join([\"c\", \"A\", \"b\", \"D\"]|sort) }}" "AbcD",
   renders (F ++ "test_sort3") "{{ ['foo', 'Bar', 'blah']|sort }}" "['Bar', 'blah', 'foo']",
   renders (F ++ "test_sort4") "{{ items|sort(attribute='value')|map(attribute='value')|join }}" "1234"
-    [("items", .list ([3, 2, 4, 1].map (fun (i : Int) => obj [("value", .int i)])))],
+    [("items", .list (#[3, 2, 4, 1].map (fun (i : Int) => obj [("value", .int i)])))],
   renders (F ++ "test_sort6") "{{ items|sort(attribute='value1,value2')|map('string')|join }}"
     "{'value1': 2, 'value2': 1}{'value1': 2, 'value2': 2}{'value1': 2, 'value2': 5}{'value1': 3, 'value2': 1}"
-    [("items", .list ([(3, 1), (2, 2), (2, 1), (2, 5)].map (fun (p : Int × Int) =>
+    [("items", .list (#[(3, 1), (2, 2), (2, 1), (2, 5)].map (fun (p : Int × Int) =>
       obj [("value1", .int p.1), ("value2", .int p.2)])))],
   renders (F ++ "test_unique") "{{ \"\".join([\"b\", \"A\", \"a\", \"b\"]|unique) }}" "bA",
   renders (F ++ "test_unique_case_sensitive") "{{ \"\".join([\"b\", \"A\", \"a\", \"b\"]|unique(true)) }}" "bAa",
   renders (F ++ "test_unique_attribute") "{{ items|unique(attribute='value')|map(attribute='value')|join }}" "3241"
-    [("items", .list ([3, 2, 4, 1, 2].map (fun (i : Int) => obj [("value", .int i)])))],
+    [("items", .list (#[3, 2, 4, 1, 2].map (fun (i : Int) => obj [("value", .int i)])))],
   renders (F ++ "test_min_max[min]") "{{ [\"a\", \"B\"]|min }}" "a",
   renders (F ++ "test_min_max[min-cs]") "{{ [\"a\", \"B\"]|min(case_sensitive=true) }}" "B",
   renders (F ++ "test_min_max[min-empty]") "{{ []|min }}" "",
   renders (F ++ "test_min_max[max]") "{{ [\"a\", \"B\"]|max }}" "B",
   renders (F ++ "test_min_max[max-cs]") "{{ [\"a\", \"B\"]|max(case_sensitive=true) }}" "a",
   renders (F ++ "test_min_max_attribute[min]") "{{ (items|min(attribute=\"value\")).value }}" "1"
-    [("items", .list ([5, 1, 9].map (fun (i : Int) => obj [("value", .int i)])))],
+    [("items", .list (#[5, 1, 9].map (fun (i : Int) => obj [("value", .int i)])))],
   renders (F ++ "test_groupby")
     "{%- for grouper, list in [{'foo': 1, 'bar': 2}, {'foo': 2, 'bar': 3}, {'foo': 1, 'bar': 1}, {'foo': 3, 'bar': 4}]|groupby('foo') -%}{{ grouper }}{% for x in list %}: {{ x.foo }}, {{ x.bar }}{% endfor %}|{%- endfor %}"
     "1: 1, 2: 1, 1|2: 2, 3|3: 3, 4|",
@@ -232,17 +232,17 @@ def filterCases : List Case := [
   renders (F ++ "test_groupby_default")
     "{% for city, items in users|groupby('city', default='NY') %}{{ city }}: {{ items|map(attribute='name')|join(', ') }}\n{% endfor %}"
     "NY: emma, john\nWA: smith\n"
-    [("users", .list [obj [("name", "emma"), ("city", "NY")], obj [("name", "smith"), ("city", "WA")],
+    [("users", .list #[obj [("name", "emma"), ("city", "NY")], obj [("name", "smith"), ("city", "WA")],
       obj [("name", "john")]])],
   renders (F ++ "test_groupby_case[False]")
     "{% for k, vs in data|groupby('k', case_sensitive=cs) %}{{ k }}: {{ vs|join(', ', attribute='v') }}\n{% endfor %}"
     "a: 1, 3\nb: 2\n"
-    [("data", .list [obj [("k", "a"), ("v", 1)], obj [("k", "b"), ("v", 2)], obj [("k", "A"), ("v", 3)]]),
+    [("data", .list #[obj [("k", "a"), ("v", 1)], obj [("k", "b"), ("v", 2)], obj [("k", "A"), ("v", 3)]]),
      ("cs", false)],
   renders (F ++ "test_groupby_case[True]")
     "{% for k, vs in data|groupby('k', case_sensitive=cs) %}{{ k }}: {{ vs|join(', ', attribute='v') }}\n{% endfor %}"
     "A: 3\na: 1\nb: 2\n"
-    [("data", .list [obj [("k", "a"), ("v", 1)], obj [("k", "b"), ("v", 2)], obj [("k", "A"), ("v", 3)]]),
+    [("data", .list #[obj [("k", "a"), ("v", 1)], obj [("k", "b"), ("v", 2)], obj [("k", "A"), ("v", 3)]]),
      ("cs", true)],
   renders (F ++ "test_filtertag") "{% filter upper|replace('FOO', 'foo') %}foobar{% endfilter %}" "fooBAR",
   renders (F ++ "test_replace") "{{ string|replace(\"o\", 42) }}" "<f4242>" [("string", "<foo>")],
@@ -260,19 +260,19 @@ def filterCases : List Case := [
   renders (F ++ "test_urlencode[unicode]") "{{ value|urlencode }}" "Hello%2C%20world%E2%80%BD" [("value", "Hello, world‽")] (env := ae),
   renders (F ++ "test_urlencode[dict]") "{{ value|urlencode }}" "f=1" [("value", obj [("f", 1)])] (env := ae),
   renders (F ++ "test_urlencode[pairs]") "{{ value|urlencode }}" "f=1&amp;z=2"
-    [("value", .list [.tuple ["f", 1], .tuple ["z", 2]])] (env := ae),
+    [("value", .list #[.tuple #["f", 1], .tuple #["z", 2]])] (env := ae),
   renders (F ++ "test_urlencode[intkey]") "{{ value|urlencode }}" "0=1" [("value", .dict [(.int 0, 1)])] (env := ae),
   renders (F ++ "test_urlencode[qs]") "{{ value|urlencode }}" "a+b%2Fc=a+b%2Fc"
-    [("value", .list [.tuple ["a b/c", "a b/c"]])] (env := ae),
+    [("value", .list #[.tuple #["a b/c", "a b/c"]])] (env := ae),
   renders (F ++ "test_urlencode[path]") "{{ value|urlencode }}" "a%20b/c" [("value", "a b/c")] (env := ae),
   renders (F ++ "test_simple_map") "{{ [\"1\", \"2\", \"3\"]|map(\"int\")|sum }}" "6",
   renders (F ++ "test_map_sum") "{{ [[1,2], [3], [4,5,6]]|map(\"sum\")|list }}" "[3, 3, 15]",
   renders (F ++ "test_attribute_map") "{{ users|map(attribute=\"name\")|join(\"|\") }}" "john|jane|mike"
-    [("users", .list [obj [("name", "john")], obj [("name", "jane")], obj [("name", "mike")]])],
+    [("users", .list #[obj [("name", "john")], obj [("name", "jane")], obj [("name", "mike")]])],
   renders (F ++ "test_empty_map") "{{ none|map(\"upper\")|list }}" "[]",
   renders (F ++ "test_map_default") "{{ users|map(attribute=\"lastname\", default=\"smith\")|join(\", \") }}"
     "lennon, edwards, None, smith"
-    [("users", .list [obj [("firstname", "john"), ("lastname", "lennon")],
+    [("users", .list #[obj [("firstname", "john"), ("lastname", "lennon")],
       obj [("firstname", "jane"), ("lastname", "edwards")], obj [("firstname", "jon"), ("lastname", .none)],
       obj [("firstname", "mike")]])],
   renders (F ++ "test_simple_select") "{{ [1, 2, 3, 4, 5]|select(\"odd\")|join(\"|\") }}" "1|3|5",
@@ -280,16 +280,16 @@ def filterCases : List Case := [
   renders (F ++ "test_simple_reject") "{{ [1, 2, 3, 4, 5]|reject(\"odd\")|join(\"|\") }}" "2|4",
   renders (F ++ "test_bool_reject") "{{ [none, false, 0, 1, 2, 3, 4, 5]|reject|join(\"|\") }}" "None|False|0",
   renders (F ++ "test_simple_select_attr") "{{ users|selectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\") }}"
-    "john|jane" [("users", .list [obj [("name", "john"), ("is_active", true)],
+    "john|jane" [("users", .list #[obj [("name", "john"), ("is_active", true)],
       obj [("name", "jane"), ("is_active", true)], obj [("name", "mike"), ("is_active", false)]])],
   renders (F ++ "test_simple_reject_attr") "{{ users|rejectattr(\"is_active\")|map(attribute=\"name\")|join(\"|\") }}"
-    "mike" [("users", .list [obj [("name", "john"), ("is_active", true)],
+    "mike" [("users", .list #[obj [("name", "john"), ("is_active", true)],
       obj [("name", "jane"), ("is_active", true)], obj [("name", "mike"), ("is_active", false)]])],
   renders (F ++ "test_func_select_attr") "{{ users|selectattr(\"id\", \"odd\")|map(attribute=\"name\")|join(\"|\") }}"
-    "john|mike" [("users", .list [obj [("id", 1), ("name", "john")], obj [("id", 2), ("name", "jane")],
+    "john|mike" [("users", .list #[obj [("id", 1), ("name", "john")], obj [("id", 2), ("name", "jane")],
       obj [("id", 3), ("name", "mike")]])],
   renders (F ++ "test_func_reject_attr") "{{ users|rejectattr(\"id\", \"odd\")|map(attribute=\"name\")|join(\"|\") }}"
-    "jane" [("users", .list [obj [("id", 1), ("name", "john")], obj [("id", 2), ("name", "jane")],
+    "jane" [("users", .list #[obj [("id", 1), ("name", "john")], obj [("id", 2), ("name", "jane")],
       obj [("id", 3), ("name", "mike")]])],
   renders (F ++ "test_json_dump[dict]") "{{ x|tojson }}" "{\"foo\": \"bar\"}" [("x", obj [("foo", "bar")])] (env := ae),
   renders (F ++ "test_json_dump[quotes]") "{{ x|tojson }}" "\"\\\"ba\\u0026r\\u0027\"" [("x", "\"ba&r'")] (env := ae),
@@ -357,10 +357,10 @@ def testCases : List Case :=
     renders "tests/test_tests.py::test_is_filter" "{{ 'title' is filter }}|{{ 'bad-name' is filter }}" "True|False",
     renders "tests/test_tests.py::test_is_test" "{{ 'number' is test }}|{{ 'bad-name' is test }}" "True|False" ]
 
-def recSeq : Value := .list [
-  obj [("a", 1), ("b", .list [obj [("a", 1)], obj [("a", 2)]])],
-  obj [("a", 2), ("b", .list [obj [("a", 1)], obj [("a", 2)]])],
-  obj [("a", 3), ("b", .list [obj [("a", "a")]])]]
+def recSeq : Value := .list #[
+  obj [("a", 1), ("b", .list #[obj [("a", 1)], obj [("a", 2)]])],
+  obj [("a", 2), ("b", .list #[obj [("a", 1)], obj [("a", 2)]])],
+  obj [("a", 3), ("b", .list #[obj [("a", "a")]])]]
 
 def coreCases : List Case := [
   renders (FL ++ "test_simple") "{% for item in seq %}{{ item }}{% endfor %}" "0123456789" [("seq", range' 10)],
@@ -372,12 +372,12 @@ def coreCases : List Case := [
     "1|0|2|1|True|False|2###2|1|1|0|False|True|2###" [("seq", ints [42, 24])],
   renders (FL ++ "test_cycling")
     "{% for item in seq %}{{ loop.cycle('<1>', '<2>') }}{% endfor %}{% for item in seq %}{{ loop.cycle(*through) }}{% endfor %}"
-    "<1><2><1><2><1><2><1><2>" [("seq", range' 4), ("through", .tuple ["<1>", "<2>"])],
+    "<1><2><1><2><1><2><1><2>" [("seq", range' 4), ("through", .tuple #["<1>", "<2>"])],
   renders (FL ++ "test_lookaround")
     "{% for item in seq -%}{{ loop.previtem|default('x') }}-{{ item }}-{{ loop.nextitem|default('x') }}|{%- endfor %}"
     "x-0-1|0-1-2|1-2-3|2-3-x|" [("seq", range' 4)],
   renders (FL ++ "test_changed") "{% for item in seq -%}{{ loop.changed(item) }},{%- endfor %}"
-    "True,False,True,True,False,True,True,False,False," [("seq", .list [.none, .none, 1, 2, 2, 3, 4, 4, 4])],
+    "True,False,True,True,False,True,True,False,False," [("seq", .list #[.none, .none, 1, 2, 2, 3, 4, 4, 4])],
   renders (FL ++ "test_scope") "{% for item in seq %}{% endfor %}{{ item }}" "" [("seq", range' 10)],
   renders (FL ++ "test_varlen") "{% for item in iter %}{{ item }}{% endfor %}" "01234" [("iter", range' 5)],
   fails (FL ++ "test_noniter") "{% for item in none %}...{% endfor %}" isType,
@@ -406,18 +406,18 @@ def coreCases : List Case := [
   fails (FL ++ "test_loop_unassignable") "{% for loop in seq %}...{% endfor %}" isSyntax,
   renders (FL ++ "test_scoped_special_var")
     "{% for s in seq %}[{{ loop.first }}{% for c in s %}|{{ loop.first }}{% endfor %}]{% endfor %}"
-    "[True|True|False][False|True|False]" [("seq", .tuple ["ab", "cd"])],
+    "[True|True|False][False|True|False]" [("seq", .tuple #["ab", "cd"])],
   renders (FL ++ "test_scoped_loop_var") "{% for x in seq %}{{ loop.first }}{% for y in seq %}{% endfor %}{% endfor %}"
     "TrueFalse" [("seq", "ab")],
   renders (FL ++ "test_scoped_loop_var[inner]") "{% for x in seq %}{% for y in seq %}{{ loop.first }}{% endfor %}{% endfor %}"
     "TrueFalseTrueFalse" [("seq", "ab")],
-  renders (FL ++ "test_recursive_empty_loop_iter") "{%- for item in foo recursive -%}{%- endfor -%}" "" [("foo", .list [])],
+  renders (FL ++ "test_recursive_empty_loop_iter") "{%- for item in foo recursive -%}{%- endfor -%}" "" [("foo", .list #[])],
   renders (FL ++ "test_call_in_loop")
     "{%- macro do_something() -%}[{{ caller() }}]{%- endmacro %}{%- for i in [1, 2, 3] %}{%- call do_something() -%}{{ i }}{%- endcall %}{%- endfor -%}"
     "[1][2][3]",
   renders (FL ++ "test_scoping_bug")
     "{%- for item in foo %}...{{ item }}...{% endfor %}{%- macro item(a) %}...{{ a }}...{% endmacro %}{{- item(2) -}}"
-    "...1......2..." [("foo", .tuple [1])],
+    "...1......2..." [("foo", .tuple #[1])],
   renders (FL ++ "test_unpacking") "{% for a, b, c in [[1, 2, 3]] %}{{ a }}|{{ b }}|{{ c }}{% endfor %}" "1|2|3",
   renders (FL ++ "test_intended_scoping_with_set") "{% for item in seq %}{{ x }}{% set x = item %}{{ x }}{% endfor %}"
     "010203" [("x", 0), ("seq", ints [1, 2, 3])],
@@ -604,25 +604,25 @@ def lexCases : List Case := [
   renders (LS ++ "test_lstrip_comment") "    {# if True #}\nhello\n    {#endif#}" "\nhello\n" (env := lstrip),
   renders (LS ++ "test_lstrip_blocks_outside_with_new_line")
     "  {% if kvs %}(\n   {% for k, v in kvs %}{{ k }}={{ v }} {% endfor %}\n  ){% endif %}" "(\na=1 b=2 \n  )"
-    [("kvs", .list [.tuple ["a", 1], .tuple ["b", 2]])] (env := lstrip),
+    [("kvs", .list #[.tuple #["a", 1], .tuple #["b", 2]])] (env := lstrip),
   renders (LS ++ "test_lstrip_trim_blocks_outside_with_new_line")
     "  {% if kvs %}(\n   {% for k, v in kvs %}{{ k }}={{ v }} {% endfor %}\n  ){% endif %}" "(\na=1 b=2   )"
-    [("kvs", .list [.tuple ["a", 1], .tuple ["b", 2]])] (env := lstripTrim),
+    [("kvs", .list #[.tuple #["a", 1], .tuple #["b", 2]])] (env := lstripTrim),
   renders (LS ++ "test_lstrip_blocks_inside_with_new_line")
     "  ({% if kvs %}\n   {% for k, v in kvs %}{{ k }}={{ v }} {% endfor %}\n  {% endif %})" "  (\na=1 b=2 \n)"
-    [("kvs", .list [.tuple ["a", 1], .tuple ["b", 2]])] (env := lstrip),
+    [("kvs", .list #[.tuple #["a", 1], .tuple #["b", 2]])] (env := lstrip),
   renders (LS ++ "test_lstrip_trim_blocks_inside_with_new_line")
     "  ({% if kvs %}\n   {% for k, v in kvs %}{{ k }}={{ v }} {% endfor %}\n  {% endif %})" "  (a=1 b=2 )"
-    [("kvs", .list [.tuple ["a", 1], .tuple ["b", 2]])] (env := lstripTrim),
+    [("kvs", .list #[.tuple #["a", 1], .tuple #["b", 2]])] (env := lstripTrim),
   renders (LS ++ "test_lstrip_blocks_without_new_line")
     "  {% if kvs %}   {% for k, v in kvs %}{{ k }}={{ v }} {% endfor %}  {% endif %}" "   a=1 b=2   "
-    [("kvs", .list [.tuple ["a", 1], .tuple ["b", 2]])] (env := lstrip),
+    [("kvs", .list #[.tuple #["a", 1], .tuple #["b", 2]])] (env := lstrip),
   renders (LS ++ "test_lstrip_blocks_consume_after_without_new_line")
     "  {% if kvs -%}   {% for k, v in kvs %}{{ k }}={{ v }} {% endfor -%}  {% endif -%}" "a=1 b=2 "
-    [("kvs", .list [.tuple ["a", 1], .tuple ["b", 2]])] (env := lstrip),
+    [("kvs", .list #[.tuple #["a", 1], .tuple #["b", 2]])] (env := lstrip),
   renders (LS ++ "test_lstrip_trim_blocks_consume_before_without_new_line")
     "  {%- if kvs %}   {%- for k, v in kvs %}{{ k }}={{ v }} {% endfor -%}  {%- endif %}" "a=1 b=2 "
-    [("kvs", .list [.tuple ["a", 1], .tuple ["b", 2]])],
+    [("kvs", .list #[.tuple #["a", 1], .tuple #["b", 2]])],
   renders (LS ++ "test_lstrip_trim_blocks_comment") " {# 1 space #}\n  {# 2 spaces #}    {# 4 spaces #}" "    "
     (env := lstripTrim),
   renders (LS ++ "test_lstrip_trim_blocks_raw") "{{x}}\n{%- raw %} {% endraw -%}\n{{ y }}" "1 2"
@@ -929,7 +929,7 @@ def macroCases : List Case := [
   renders (RG ++ "test_call_with_args")
     "{% macro dump_users(users) -%}<ul>{%- for user in users -%}<li><p>{{ user.username|e }}</p>{{ caller(user) }}</li>{%- endfor -%}</ul>{%- endmacro -%}{% call(user) dump_users(list_of_user) -%}<dd>{{ user.realname|e }}</dd>{% endcall %}"
     "<ul><li><p>apo</p><dd>something else</dd></li></ul>"
-    [("list_of_user", .list [Value.ofDict [("username", "apo"), ("realname", "something else")]])],
+    [("list_of_user", .list #[Value.ofDict [("username", "apo"), ("realname", "something else")]])],
   rendersT (RG ++ "test_caller_scoping") { loader := DictLoader [("t",
       "{% macro detail(icon, value) -%}{% if value -%}<p><span class=\"fa fa-fw fa-{{ icon }}\"></span>{%- if caller is undefined -%}{{ value }}{%- else -%}{{ caller(value, *varargs) }}{%- endif -%}</p>{%- endif %}{%- endmacro %}{% macro link_detail(icon, value, href) -%}{% call(value, href) detail(icon, value, href) -%}<a href=\"{{ href }}\">{{ value }}</a>{%- endcall %}{%- endmacro %}"),
       ("u", "{% import 't' as t %}{{ t.link_detail('circle', 'Index', '/') }}")] }
@@ -1018,7 +1018,7 @@ The one-pass slicing, `unique`, `repr`, `slice` filter and string indexing
 def valueOpCases : List Case := [
   renders (F ++ "test_groupby[real]")
     "{% for k, l in x|groupby('real') %}{{ k }}:{{ l }};{% endfor %}" "1:[1, 1];2:[2];3:[3, 3.0];"
-    [("x", .list [3, 1, 2, 1, .float 30 1])],
+    [("x", .list #[3, 1, 2, 1, .float 30 1])],
   renders (F ++ "test_unique[number-attributes]")
     "{{ (5).real }} {{ (5).imag }} {{ (5).numerator }} {{ (5).denominator }} {{ true.real }} {{ (2.5).real }} {{ (2.5).imag }}"
     "5 0 5 1 1 2.5 0.0",

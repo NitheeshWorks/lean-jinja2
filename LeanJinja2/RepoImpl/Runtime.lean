@@ -51,8 +51,8 @@ def charValues (s : String) : List Value := s.toList.map (fun c => .str (String.
 
 /-- Python `iter(v)` under the undefined policy: the items a `for` loop sees. -/
 def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (List Value)
-  | .list xs => .ok xs
-  | .tuple xs | .namedTuple _ _ xs => .ok xs
+  | .list xs => .ok xs.toList
+  | .tuple xs | .namedTuple _ _ xs => .ok xs.toList
   | .dict kvs => .ok (kvs.map Prod.fst)
   | .str s => .ok (charValues s)
   | .markup m => .ok (charValues m.str)
@@ -62,8 +62,8 @@ def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (
 
 /-- Python `len(v)` under the undefined policy. -/
 def lenOf (pol : UndefinedPolicy) : Value → Except ValueError Nat
-  | .list xs => .ok xs.length
-  | .tuple xs | .namedTuple _ _ xs => .ok xs.length
+  | .list xs => .ok xs.size
+  | .tuple xs | .namedTuple _ _ xs => .ok xs.size
   | .dict kvs => .ok kvs.length
   | .str s => .ok s.length
   | .markup m => .ok m.str.length
@@ -113,13 +113,13 @@ def strMethods : List String :=
 def listMethods : List String := ["index", "count"]
 
 /-- Python list indexing with negative indices. -/
-def indexList (xs : List Value) (i : Int) : Option Value :=
-  let n : Int := xs.length
+def indexList (xs : Array Value) (i : Int) : Option Value :=
+  let n : Int := xs.size
   let j := if i < 0 then i + n else i
   if j < 0 || j ≥ n then none else xs[j.toNat]?
 
 /-- Python `s[i]` on a string: the character as a string, without a value
-per character (`indexList (charValues s) i`). -/
+per character (`indexList (charValues s).toArray i`). -/
 def strIndex (s : String) (i : Int) : Option String :=
   let n : Int := s.length
   let j := if i < 0 then i + n else i
@@ -159,7 +159,7 @@ def pyAttr (heap : Heap) (v : Value) (a : String) : Option Value :=
   | .list _ => if listMethods.contains a then some (.method v a) else none
   | .tuple _ => if a == "index" || a == "count" then some (.method v a) else none
   | .namedTuple _ fs xs =>
-    match (fs.zip xs).lookup a with
+    match (fs.zip xs.toList).lookup a with
     | some x => some x
     | none => if a == "index" || a == "count" then some (.method (.tuple xs) a) else none
   | .cycler addr =>
@@ -186,7 +186,7 @@ def pyAttr (heap : Heap) (v : Value) (a : String) : Option Value :=
   | .macro n ps body uc .. =>
     match a with
     | "name" => some (.str n)
-    | "arguments" => some (.tuple (ps.map (fun p => .str p.1)))
+    | "arguments" => some (.tuple (ps.map (fun p => Value.str p.1)).toArray)
     | "caller" => some (.bool uc)
     | "catch_kwargs" => some (.bool (mentionsName "kwargs" body))
     | "catch_varargs" => some (.bool (mentionsName "varargs" body))
@@ -205,6 +205,15 @@ def pyItem (heap : Heap) (v : Value) (k : Value) : Option Value :=
   | .markup m, .int i => (strIndex m.str i).map (fun t => .markup (Markup.markSafe t))
   | .ns addr, .str a => ((heap[addr]?).getD []).lookup a
   | _, _ => none
+
+/-- `v[k]` once Python's item lookup gave `r`: the item, else the attribute
+`k` names, else undefined (upstream `Environment.getitem`). -/
+def itemOr (heap : Heap) (v k : Value) : Option Value → Value
+  | some r => r
+  | none =>
+    match k with
+    | .str a => (pyAttr heap v a).getD (.undef (.attr v.objectTypeRepr a))
+    | _ => .undef (.hint s!"{v.objectTypeRepr} has no element {k.repr}")
 
 /-- Upstream `Environment.getattr(obj, attr)`: attribute, then item, then
 undefined. Attribute access on an undefined value fails, except under the
@@ -227,16 +236,7 @@ def getitemV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (k : Value) :
     Except ValueError Value :=
   match v with
   | .undef i => if i.policy pol == .chainable then .ok v else failUndef i
-  | _ =>
-    match pyItem heap v k with
-    | some r => .ok r
-    | none =>
-      match k with
-      | .str a =>
-        match pyAttr heap v a with
-        | some r => .ok r
-        | none => .ok (.undef (.attr v.objectTypeRepr a))
-      | _ => .ok (.undef (.hint s!"{v.objectTypeRepr} has no element {k.repr}"))
+  | _ => .ok (itemOr heap v k (pyItem heap v k))
 
 /-- Python slice bounds for a sequence of length `n`. -/
 def sliceRange (n : Nat) (start stop step : Option Int) : Except ValueError (Int × Int × Nat) :=
@@ -287,10 +287,9 @@ def sliceV (pol : UndefinedPolicy) (v : Value) (start stop step : Option Value) 
   let b ← sliceBound stop
   let c ← sliceBound step
   -- one pass over an array of the items (a list indexed per item is quadratic)
-  let pick := fun (xs : List Value) => do
-    let arr := xs.toArray
+  let pick := fun (arr : Array Value) => do
     let (i, st, count) ← sliceRange arr.size a b c
-    pure (slicePick arr i st count).toList
+    pure (slicePick arr i st count)
   let pickStr := fun (s : String) => do
     let arr : Array Char := s.foldl (·.push ·) #[]
     let (i, st, count) ← sliceRange arr.size a b c
@@ -304,6 +303,10 @@ def sliceV (pol : UndefinedPolicy) (v : Value) (start stop step : Option Value) 
   | _ => .error (.typeError s!"'{v.typeName}' object is not subscriptable")
 
 /-! ## Arithmetic -/
+
+/-- `k` copies of an array, one after another (Python `xs * k`). -/
+def repeatArr (xs : Array Value) (k : Nat) : Array Value :=
+  (List.replicate k xs).foldl (· ++ ·) #[]
 
 /-- The result of a binary arithmetic operator on defined values. -/
 def arith (op : BinOp) (a b : Value) : Except ValueError Value :=
@@ -334,9 +337,9 @@ def arith (op : BinOp) (a b : Value) : Except ValueError Value :=
     match a, b with
     | .str s, .int k | .int k, .str s => .ok (.str (String.join (List.replicate k.toNat s)))
     | .markup m, .int k | .int k, .markup m => .ok (.markup (Markup.times m k.toNat))
-    | .list xs, .int k | .int k, .list xs => .ok (.list (List.replicate k.toNat xs).flatten)
+    | .list xs, .int k | .int k, .list xs => .ok (.list (repeatArr xs k.toNat))
     | .tuple xs, .int k | .int k, .tuple xs | .namedTuple _ _ xs, .int k | .int k, .namedTuple _ _ xs =>
-      .ok (.tuple (List.replicate k.toNat xs).flatten)
+      .ok (.tuple (repeatArr xs k.toNat))
     | _, _ =>
       match a.num?, b.num? with
       | some x, some y => if a.isFloat || b.isFloat then .ok (mkFloat (decMul x y))
