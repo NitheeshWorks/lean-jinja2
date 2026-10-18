@@ -94,6 +94,7 @@ def Node.collectS {α : Type} (stopE : Expr → Bool) (stopN : Node → Bool) (f
     (paramExprs ps).flatMap ex ++ ex c ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .include e _ _ => ex e
   | .extends e => ex e
+  | .import_ e _ _ | .fromImport e _ _ => ex e
   | .block _ _ _ body => body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .with_ assigns body =>
     assigns.flatMap (fun a => ex a.2) ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)

@@ -46,7 +46,9 @@ def Environment.selectTemplate (env : Environment) (names : List String) :
   | none => .error (.notFound s!"none of the templates given were found: {names}")
 
 /-- Compile a template from source (upstream `Environment.from_string`). -/
-def Environment.fromString (env : Environment) (source : String) : Except TemplateError Template := do
+def Environment.fromString (env : Environment) (source : String)
+    (globals : List (String × Value) := []) : Except TemplateError Template := do
+  let env := { env with globals := globals ++ env.globals }
   let body ← env.compile source
   pure ⟨env, none, body⟩
 
@@ -54,7 +56,7 @@ def Environment.fromString (env : Environment) (source : String) : Except Templa
 def Template.renderTrace (t : Template) (vars : List (String × Value) := []) :
     Except TemplateError (List Piece) :=
   match (renderTemplate t.env t.env.maxDepth { ctx := t.env.startContext vars } t.name t.body).run [] with
-  | .ok (ps, _) => .ok ps
+  | .ok ((ps, _), _) => .ok ps
   | .error e => .error e
 
 /-- Render the template with the given variables (upstream

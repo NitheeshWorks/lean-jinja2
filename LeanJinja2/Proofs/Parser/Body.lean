@@ -26,7 +26,8 @@ def Node.sz : Node → Nat
   | .setBlock t fs body => t.sz + szChain fs + Node.szs body + 1
   | .macro _ ps body => szParams ps + Node.szs body + 1
   | .callBlock ps c body => szParams ps + c.sz + Node.szs body + 1
-  | .include e _ _ | .extends e => e.sz + 1
+  | .include e _ _ | .extends e | .import_ e _ _ => e.sz + 1
+  | .fromImport e names _ => e.sz + names.length + 1
   | .block _ _ _ body => Node.szs body + 1
   | .with_ as body => szAssigns as + Node.szs body + 1
   | .filterBlock fs body => szChain fs + Node.szs body + 1
@@ -78,6 +79,92 @@ theorem expr_ok {e : Expr} (hw : e.WF) {r : List TokKind} (hr : Stop 10 r) (n : 
 
 theorem stop_be (k : Nat) (r : List TokKind) (hk : k < 99 := by omega) : Stop k (.blockEnd :: r) :=
   stop_cons _ _ (by simp [contLevel]; omega)
+
+/-- The printed `with context` / `without context`. -/
+def ctxToks (wc : Bool) : List TokKind := [.name (if wc then "with" else "without"), .name "context"]
+
+theorem importContext_ctx (wc : Bool) (R : List TokKind) :
+    importContext false (ctxToks wc ++ R) = (wc, R) := by
+  cases wc <;> rfl
+
+theorem isContextAt_ctx (wc : Bool) (R : List TokKind) : isContextAt (ctxToks wc ++ R) = true := by
+  cases wc <;> rfl
+
+/-- The separator `pFromNames` expects before the next name. -/
+def namesSep (acc : List (String × Option String)) : List TokKind :=
+  if acc.isEmpty then [] else [.op .comma]
+
+theorem namesSep_read (acc : List (String × Option String)) (X : List TokKind) :
+    (if acc.isEmpty then (.ok ((), namesSep acc ++ X) : PR Unit) else expect (.op .comma) (namesSep acc ++ X)) =
+      .ok ((), X) := by
+  cases acc <;> simp [namesSep, expect]
+
+/-- One name and what follows it (`T`, which starts with a comma or the
+context): `pFromNames` reads the name and its alias. -/
+theorem fromName_step (p : String × Option String) (hp : ImportNameWF p)
+    (acc : List (String × Option String)) (k : Nat) (T : List TokKind)
+    (hT : T.head? = some (.op .comma) ∨ ∃ wc R, T = ctxToks wc ++ R) :
+    pFromNames (k + 1) acc (namesSep acc ++ (Pretty.importName p ++ T)) =
+      if isContextAt T then .ok (((p :: acc).reverse, (importContext false T).1), (importContext false T).2)
+      else if isOp .comma T.head? then pFromNames k (p :: acc) T
+      else .ok (((p :: acc).reverse, false), T) := by
+  obtain ⟨n, a⟩ := p
+  obtain ⟨hn, hu, ha⟩ := hp
+  have hT1 : isName "as" T.head? = false := by
+    rcases hT with h | ⟨wc, R, rfl⟩
+    · simp [h, isName]
+    · cases wc <;> simp [ctxToks, isName]
+  have hnc2 : isContextAt (.name n :: T) = false := by
+    unfold isContextAt
+    rcases hT with h | ⟨wc, R, rfl⟩
+    · cases T with
+      | nil => simp at h
+      | cons t T' => simp at h; subst h; split <;> simp_all
+    · cases wc <;> simp [ctxToks]
+  rw [pFromNames]
+  cases a with
+  | none =>
+    cases hacc : acc.isEmpty <;>
+    simp only [namesSep, hacc, ↓reduceIte, Bool.false_eq_true, List.nil_append, List.cons_append,
+      expect, beq_self_eq_true, bind, Except.bind, Pretty.importName, Pretty.nm, hnc2,
+      pParamName_ok hn, hu, hT1] <;> rfl
+  | some a =>
+    have hnc : isContextAt (.name n :: .name "as" :: .name a :: T) = false := by
+      simp [isContextAt]
+    cases hacc : acc.isEmpty <;>
+    simp only [namesSep, hacc, ↓reduceIte, Bool.false_eq_true, List.nil_append, List.cons_append,
+      expect, beq_self_eq_true, bind, Except.bind, Pretty.importName, Pretty.nm, hnc,
+      pParamName_ok hn, hu, isName, List.head?_cons, List.tail_cons, pParamName_ok (ha a rfl)] <;> rfl
+
+theorem fromNames_ok (wc : Bool) (R : List TokKind) :
+    ∀ (ps : List (String × Option String)) (p : String × Option String)
+      (acc : List (String × Option String)) (k : Nat),
+    ImportNameWF p → (∀ q ∈ ps, ImportNameWF q) → ps.length ≤ k →
+    pFromNames (k + 1) acc (namesSep acc ++ (Pretty.importNames (p :: ps) ++ (ctxToks wc ++ R))) =
+      .ok ((acc.reverse ++ p :: ps, wc), R) := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro p acc k hp _ _
+    rw [show Pretty.importNames [p] = Pretty.importName p by rfl,
+      fromName_step p hp acc k _ (Or.inr ⟨wc, R, rfl⟩), isContextAt_ctx, importContext_ctx]
+    simp
+  | cons q qs ih =>
+    intro p acc k hp hps hk
+    obtain ⟨k, rfl⟩ : ∃ k', k = k' + 1 := ⟨k - 1, by simp at hk; omega⟩
+    have hq := hps q (by simp)
+    have hqs : ∀ r ∈ qs, ImportNameWF r := fun r hr => hps r (by simp [hr])
+    rw [show Pretty.importNames (p :: q :: qs) = Pretty.importName p ++ (.op .comma :: Pretty.importNames (q :: qs))
+        by simp [Pretty.importNames, Pretty.op]]
+    simp only [List.append_assoc, List.cons_append]
+    rw [fromName_step p hp acc (k + 1) _ (Or.inl rfl)]
+    have hc : isContextAt (.op .comma :: (Pretty.importNames (q :: qs) ++ (ctxToks wc ++ R))) = false := by
+      simp [isContextAt]
+    simp only [hc, Bool.false_eq_true, ↓reduceIte, List.head?_cons, isOp]
+    have := ih q (p :: acc) k hq hqs (by simp at hk; omega)
+    simp only [namesSep, List.isEmpty_cons, Bool.false_eq_true, ↓reduceIte, List.cons_append,
+      List.nil_append] at this
+    rw [this]; simp
 
 mutual
 theorem body_ok : (b : List Node) → Node.BodyWF b → ∀ (stack : TagStack) (ends : List String), EndsOK ends →
@@ -161,6 +248,37 @@ theorem node_ok : (nd : Node) → nd.WF → nd.isTag = true → TagOK nd
     obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by omega⟩
     have h := expr_ok hw (stop_be 10 R) m (by simp [Node.sz] at hn; omega)
     simp [pStatement, h, bind, Except.bind]
+  | .import_ e t wc, hw, _ => by
+    simp only [Node.WF] at hw
+    obtain ⟨he, ht⟩ := hw
+    refine ⟨"import", Pretty.expr e ++ (.name "as" :: .name t :: ctxToks wc), by decide,
+      by cases wc <;> simp [Pretty.node, Pretty.tag, ctxToks, Pretty.nm], ?_⟩
+    intro stack R n hn
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by omega⟩
+    have h := expr_ok he (r := .name "as" :: .name t :: (ctxToks wc ++ .blockEnd :: R))
+      (stop_cons _ _ (by simp [contLevel])) m (by simp [Node.sz] at hn; omega)
+    simp only [List.append_assoc, List.cons_append] at h ⊢
+    simp [pStatement, h, expect, pParamName_ok ht, importContext_ctx, bind, Except.bind]
+  | .fromImport e names wc, hw, _ => by
+    simp only [Node.WF] at hw
+    obtain ⟨he, hns⟩ := hw
+    refine ⟨"from", Pretty.expr e ++ (.name "import" :: (Pretty.importNames names ++ ctxToks wc)), by decide,
+      by cases wc <;> simp [Pretty.node, Pretty.tag, ctxToks, Pretty.nm], ?_⟩
+    intro stack R n hn
+    obtain ⟨m, rfl⟩ : ∃ m, n = m + 1 := ⟨n - 1, by omega⟩
+    have h := expr_ok he (r := .name "import" :: (Pretty.importNames names ++ (ctxToks wc ++ .blockEnd :: R)))
+      (stop_cons _ _ (by simp [contLevel])) m (by simp [Node.sz] at hn; omega)
+    have hN : pFromNames m [] (Pretty.importNames names ++ (ctxToks wc ++ .blockEnd :: R)) =
+        .ok ((names, wc), .blockEnd :: R) := by
+      obtain ⟨j, rfl⟩ : ∃ j, m = j + 1 := ⟨m - 1, by simp [Node.sz] at hn; omega⟩
+      cases names with
+      | nil => cases wc <;> rfl
+      | cons p ps =>
+        have := fromNames_ok wc (.blockEnd :: R) ps p [] j (hns p (by simp))
+          (fun q hq => hns q (by simp [hq])) (by simp [Node.sz] at hn; omega)
+        simpa [namesSep] using this
+    simp only [List.append_assoc, List.cons_append] at h ⊢
+    simp [pStatement, h, expect, hN, bind, Except.bind]
   | .autoescape e body, hw, _ => by
     simp only [Node.WF] at hw
     obtain ⟨he, hb⟩ := hw
@@ -536,6 +654,15 @@ theorem assigns_length : (as : List (Target × Expr)) → szAssigns as ≤ (Pret
     simp only [szAssigns, Pretty.assigns, List.length_append, List.length_cons, List.length_nil] at *
     omega
 
+theorem importNames_length : (names : List (String × Option String)) →
+    names.length ≤ (Pretty.importNames names).length
+  | [] => by simp
+  | [(n, a)] => by cases a <;> simp [Pretty.importNames, Pretty.importName]
+  | (n, a) :: q :: qs => by
+    have := importNames_length (q :: qs)
+    cases a <;> simp only [Pretty.importNames, Pretty.importName, List.length_append, List.length_cons,
+      List.length_nil] at * <;> omega
+
 mutual
 theorem node_length : (nd : Node) → nd.sz + 1 ≤ (Pretty.node nd).length
   | .text _ => by simp [Node.sz, Pretty.node]
@@ -594,6 +721,15 @@ theorem node_length : (nd : Node) → nd.sz + 1 ≤ (Pretty.node nd).length
     omega
   | .extends e => by
     have := expr_length e
+    simp only [Node.sz, Pretty.node, Pretty.tag, List.length_append, List.length_cons, List.length_nil] at *
+    omega
+  | .import_ e _ wc => by
+    have := expr_length e
+    simp only [Node.sz, Pretty.node, Pretty.tag, List.length_append, List.length_cons, List.length_nil] at *
+    omega
+  | .fromImport e names wc => by
+    have := expr_length e
+    have := importNames_length names
     simp only [Node.sz, Pretty.node, Pretty.tag, List.length_append, List.length_cons, List.length_nil] at *
     omega
   | .block _ _ _ body => by

@@ -114,8 +114,7 @@ Each one has a `docs/traceability.toml` row (`deviation` or `excluded`).
 * **Numbers.** Float literals are exact decimals (rationals), not binary
   doubles. Arithmetic on them is exact, so a printed result can differ from
   Python's in the last digits.
-* **Not implemented:** `import` and `from ... import`, macro `*varargs` and
-  `**kwargs`, line statements and line comments, the globals `cycler`,
+* **Not implemented:** line statements and line comments, the globals `cycler`,
   `joiner` and `lipsum`, and the `random` and `urlize` filters.
 * **Autoescape** is `.const b` or `selectAutoescape ...` (the
   `AutoescapePolicy` data type), not an arbitrary callable.

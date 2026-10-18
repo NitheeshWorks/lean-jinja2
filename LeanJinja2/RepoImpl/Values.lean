@@ -202,7 +202,7 @@ def Value.typeName : Value → String
   | .float .. => "float" | .str _ => "str" | .markup _ => "Markup" | .list _ => "list"
   | .tuple _ => "tuple" | .dict _ => "dict" | .macro .. => "Macro" | .native _ => "function"
   | .method .. => "builtin_function_or_method" | .loop .. => "LoopContext"
-  | .superRef .. => "BlockReference" | .ns _ => "Namespace"
+  | .superRef .. => "BlockReference" | .ns _ => "Namespace" | .module .. => "TemplateModule"
 
 /-- Upstream `object_type_repr`. -/
 def Value.objectTypeRepr : Value → String
@@ -211,6 +211,7 @@ def Value.objectTypeRepr : Value → String
   | .macro .. => "jinja2.runtime.Macro object"
   | .loop .. => "jinja2.runtime.LoopContext object"
   | .ns _ => "jinja2.utils.Namespace object"
+  | .module .. => "jinja2.environment.TemplateModule object"
   | v => s!"{v.typeName} object"
 
 /-- The message of an undefined value (upstream `_undefined_message`). -/
@@ -241,6 +242,7 @@ def Value.repr : Value → String
   | .loop i len .. => s!"<LoopContext {i + 1}/{len}>"
   | .superRef n _ => s!"<BlockReference '{n}'>"
   | .ns a => s!"<Namespace {a}>"
+  | .module n .. => s!"<TemplateModule {pyStrRepr n}>"
 
 def Value.reprList : List Value → String
   | [] => ""
@@ -258,6 +260,7 @@ policy, see `Render`). -/
 def Value.toStr : Value → String
   | .str s => s
   | .markup m => m.str
+  | .module _ _ out => out
   | .undef _ => ""
   | v => v.repr
 
@@ -298,6 +301,12 @@ def Value.isUndef : Value → Bool
 
 def Value.isMarkup : Value → Bool
   | .markup _ => true
+  | _ => false
+
+/-- Whether a value has `__html__` (markup, and an imported template module),
+so `escape` takes its own text. -/
+def Value.hasHtml : Value → Bool
+  | .markup _ | .module .. => true
   | _ => false
 
 /-- A float result, normalised. -/

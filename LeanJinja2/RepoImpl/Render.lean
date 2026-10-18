@@ -246,6 +246,22 @@ def includeNames (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueE
     let xs ← iterOf pol heap v
     xs.mapM (strOf pol)
 
+/-- An exported value: a macro defined without a closure context gets the
+module's final context `ctx`, anything else is itself. -/
+def exportValue (ctx : List (String × Value)) : Value → Value
+  | .macro nm ps body uc clo none => .macro nm ps body uc clo (some ctx)
+  | v => v
+
+/-- What an imported template exports (upstream `Context.get_exported`): the
+names its top level assigned, newest first, without the ones starting with
+`_`. `ctx` is its final context and `start` the length of the one it began
+with; assignments at top level are prepended. Exported macros keep that
+context, so they see the module's variables wherever they are called. -/
+def moduleExports (start : Nat) (ctx : List (String × Value)) : List (String × Value) :=
+  let fresh := (ctx.take (ctx.length - start)).filter (fun p => !p.1.startsWith "_")
+  let names := fresh.map Prod.fst |>.eraseDups
+  names.filterMap fun k => (fresh.lookup k).map fun v => (k, exportValue ctx v)
+
 /-- The `loop` variable of iteration `i` over `items` (upstream
 `LoopContext`): position, length, neighbours, recursion depth. -/
 def loopValue (items : List Value) (i depth0 : Nat) (recur : Option LoopRec) (cell : Nat) : Value :=
@@ -368,18 +384,22 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       let fv ← evalE env n fr f
       let av ← args.mapM (evalE env n fr)
       let kv ← kw.mapM (fun p => do let v ← evalE env n fr p.2; pure (p.1, v))
+      let h ← get
+      let (av, kv) ← liftR (spreadArgs pol h av kv)
       callV env n fr fv av kv
     | .filter x nm args kw => do
       let v ← evalE env n fr x
       let av ← args.mapM (evalE env n fr)
       let kv ← kw.mapM (fun p => do let v ← evalE env n fr p.2; pure (p.1, v))
       let h ← get
+      let (av, kv) ← liftR (spreadArgs pol h av kv)
       liftR (applyFilter (env.fctx fr h) nm v av kv)
     | .test x nm args kw => do
       let v ← evalE env n fr x
       let av ← args.mapM (evalE env n fr)
       let kv ← kw.mapM (fun p => do let v ← evalE env n fr p.2; pure (p.1, v))
       let h ← get
+      let (av, kv) ← liftR (spreadArgs pol h av kv)
       let b ← liftR (applyTest (env.fctx fr h) nm v av kv)
       pure (.bool b)
     | .unop op x => do
@@ -422,7 +442,7 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       pure (.bool r.isSome)
     | .concat xs => do
       let vs ← xs.mapM (evalE env n fr)
-      if fr.autoescape && vs.any Value.isMarkup then do
+      if fr.autoescape && vs.any Value.hasHtml then do
         let ms ← liftR (vs.mapM (escapeOf pol))
         pure (.markup (Markup.joinMarkup Markup.empty ms))
       else do
@@ -444,7 +464,7 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
   | n + 1, fr, f, args, kw => do
     let pol := env.undefined
     match f with
-    | .macro nm ps body uc clo => callMacro env n fr nm ps body uc clo args kw
+    | .macro nm ps body uc clo mctx => callMacro env n { fr with ctx := mctx.getD fr.ctx } nm ps body uc clo args kw
     | .native "range" => liftR (rangeFn args)
     | .native "dict" => do
       let h ← get
@@ -583,7 +603,7 @@ def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Pi
       let fr' ← assignTo env n fr target v
       pure ([], fr')
     | .macro nm ps body => do
-      let fr' ← assignTo env n fr (.name nm) (.macro nm ps body (mentionsName "caller" body) fr.locals)
+      let fr' ← assignTo env n fr (.name nm) (.macro nm ps body (mentionsName "caller" body) fr.locals none)
       pure ([], fr')
     | .callBlock ps c body =>
       match c with
@@ -591,7 +611,9 @@ def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Pi
         let fv ← evalE env n fr f
         let av ← args.mapM (evalE env n fr)
         let kv ← kw.mapM (fun p => do let v ← evalE env n fr p.2; pure (p.1, v))
-        let caller := Value.macro "caller" ps body (mentionsName "caller" body) fr.locals
+        let h ← get
+        let (av, kv) ← liftR (spreadArgs pol h av kv)
+        let caller := Value.macro "caller" ps body (mentionsName "caller" body) fr.locals (some fr.ctx)
         let r ← callV env n fr fv av (kv ++ [("caller", caller)])
         pure ([.value r fr.autoescape], fr)
       | _ => throw (.assertion "expected call")
@@ -609,8 +631,27 @@ def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Pi
         let body ← liftE (env.compile src)
         let base : Frame :=
           { ctx := if withContext then fr.locals ++ fr.ctx else env.startContext [] }
-        let ps ← renderTemplate env n base (some nm) body
+        let (ps, _) ← renderTemplate env n base (some nm) body
         pure (ps, fr)
+    | .import_ e _ wc | .fromImport e _ wc => do
+      let v ← evalE env n fr e
+      let nm ← liftR (strOf pol v)
+      let src ← liftE (env.getSource nm)
+      let body ← liftE (env.compile src)
+      let base : Frame := { ctx := if wc then fr.locals ++ fr.ctx else env.startContext [] }
+      let (ps, ctx') ← renderTemplate env n base (some nm) body
+      let out ← liftR (Piece.flatten pol ps)
+      let exports := moduleExports base.ctx.length ctx'
+      match node with
+      | .fromImport _ names _ => do
+        let fr' ← names.foldlM (fun (f : Frame) (p : String × Option String) =>
+          assignTo env n f (.name (p.2.getD p.1)) ((exports.lookup p.1).getD (.undef (.hint
+            s!"the template {pyStrRepr nm} does not export the requested name {pyStrRepr p.1}")))) fr
+        pure ([], fr')
+      | _ => do
+        let target := match node with | .import_ _ t _ => t | _ => ""
+        let fr' ← assignTo env n fr (.name target) (.module nm exports out)
+        pure ([], fr')
     | .extends e => do
       if fr.parent.isSome then throw (.runtime "extended multiple times") else
       let v ← evalE env n fr e
@@ -652,6 +693,7 @@ def applyChain (env : Environment) : Nat → Frame → List FilterCall → Value
       let av ← f.args.mapM (evalE env n fr)
       let kv ← f.kwargs.mapM (fun p => do let v ← evalE env n fr p.2; pure (p.1, v))
       let h ← get
+      let (av, kv) ← liftR (spreadArgs env.undefined h av kv)
       liftR (applyFilter (env.fctx fr h) f.name acc av kv)) v
 
 /-- Assign to a target (`{% set %}`, `{% macro %}`): at top level the
@@ -735,7 +777,7 @@ def renderBlockAt (env : Environment) : Nat → Frame → String → Nat → Lis
 its blocks join the chains, and when it extends a parent, the parent renders
 next with this template's context and blocks. -/
 def renderTemplate (env : Environment) : Nat → Frame → Option String → List Node →
-    RenderM (List Piece)
+    RenderM (List Piece × List (String × Value))
   | 0, _, _, _ => throw .fuelExhausted
   | n + 1, base, name, body => do
     let ae := env.autoescape.enabledFor name
@@ -744,13 +786,13 @@ def renderTemplate (env : Environment) : Nat → Frame → Option String → Lis
       { base with own := own, top := true, parent := none, name := name, autoescape := ae, curBlock := none, locals := [] }
     let (ps, fr') ← renderNodes env n fr body
     match fr'.parent with
-    | none => pure ps
+    | none => pure (ps, fr'.ctx)
     | some pn => do
       let src ← liftE (env.getSource pn)
       let pbody ← liftE (env.compile src)
-      let pps ← renderTemplate env n
+      let (pps, ctx') ← renderTemplate env n
         { base with ctx := fr'.ctx, overrides := mergeOverrides base.overrides own } (some pn) pbody
-      pure (ps ++ pps)
+      pure (ps ++ pps, ctx')
 
 end
 

@@ -68,6 +68,17 @@ def tojsonHtmlsafe : Prop :=
   ∀ (fc : FCtx) (v r : Value), applyFilter fc "tojson" v [] [] = .ok r →
     ∃ m : Markup, r = .markup m ∧ ∀ c ∈ m.str.toList, htmlUnsafe c = false
 
+/-- `import_namespace`: the namespace an import binds (`moduleExports`, from
+the module's final context `ctx` and the length `start` of the one it began
+with) holds each name once, and looking a name up in it is looking it up in
+the module's top-level assignments, except that names starting with `_` are
+private and a macro carries the module's context. -/
+def importNamespace : Prop :=
+  ∀ (start : Nat) (ctx : List (String × Value)),
+    ((moduleExports start ctx).map Prod.fst).Nodup ∧
+    ∀ k, (moduleExports start ctx).lookup k =
+      if k.startsWith "_" then none else ((ctx.take (ctx.length - start)).lookup k).map (exportValue ctx)
+
 end Spec
 
 end LeanJinja2

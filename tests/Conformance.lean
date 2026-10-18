@@ -370,8 +370,9 @@ def coreCases : List Case := [
   renders (FL ++ "test_context_vars")
     "{% for item in seq -%}{{ loop.index }}|{{ loop.index0 }}|{{ loop.revindex }}|{{ loop.revindex0 }}|{{ loop.first }}|{{ loop.last }}|{{ loop.length }}###{% endfor %}"
     "1|0|2|1|True|False|2###2|1|1|0|False|True|2###" [("seq", ints [42, 24])],
-  renders (FL ++ "test_cycling") "{% for item in seq %}{{ loop.cycle('<1>', '<2>') }}{% endfor %}"
-    "<1><2><1><2>" [("seq", range' 4)],
+  renders (FL ++ "test_cycling")
+    "{% for item in seq %}{{ loop.cycle('<1>', '<2>') }}{% endfor %}{% for item in seq %}{{ loop.cycle(*through) }}{% endfor %}"
+    "<1><2><1><2><1><2><1><2>" [("seq", range' 4), ("through", .tuple ["<1>", "<2>"])],
   renders (FL ++ "test_lookaround")
     "{% for item in seq -%}{{ loop.previtem|default('x') }}-{{ item }}-{{ loop.nextitem|default('x') }}|{%- endfor %}"
     "x-0-1|0-1-2|1-2-3|2-3-x|" [("seq", range' 4)],
@@ -832,8 +833,110 @@ def loaderCases : List Case := [
   fsCommon "tests/test_loader.py::TestFileSystemLoader::test_searchpath_as_list_including_pathlib"
     (FileSystemLoader ["/tmp/lean-jinja2-no-such-dir/templates", fsRoot.toString]) ]
 
+/-- Render `src` compiled with template globals (upstream `from_string(src, globals=...)`). -/
+def rendersG (upstream : String) (env : Environment) (src : String) (globals : List (String × Value))
+    (expected : String) (vars : List (String × Value) := []) : Case :=
+  { upstream, name := upstream.splitOn "::" |>.getLast!, run := do
+      match env.fromString src globals >>= (·.render vars) with
+      | .ok out =>
+        if out == expected then pure true
+        else do IO.println s!"      got {repr out}, expected {repr expected}"; pure false
+      | .error e => do IO.println s!"      error {e}"; pure false }
+
+/-- Compiles without error. -/
+def compiles (upstream : String) (src : String) (env : Environment := {}) : Case :=
+  { upstream, name := upstream.splitOn "::" |>.getLast!, run := do
+      match env.fromString src with
+      | .ok _ => pure true
+      | .error e => do IO.println s!"      error {e}"; pure false }
+
+/-- The upstream `test_env` of `tests/test_imports.py`. -/
+def importEnv : Environment := {
+  loader := DictLoader [
+    ("module", "{% macro test() %}[{{ foo }}|{{ bar }}]{% endmacro %}"),
+    ("header", "[{{ foo }}|{{ 23 }}]"),
+    ("o_printer", "({{ o }})")],
+  globals := [("bar", 23)] }
+
+def IM := "tests/test_imports.py::TestImports::"
+
+def importCases : List Case := [
+  renders (IM ++ "test_context_imports[import]") "{% import \"module\" as m %}{{ m.test() }}" "[|23]"
+    [("foo", 42)] (env := importEnv),
+  renders (IM ++ "test_context_imports[import-without]") "{% import \"module\" as m without context %}{{ m.test() }}"
+    "[|23]" [("foo", 42)] (env := importEnv),
+  renders (IM ++ "test_context_imports[import-with]") "{% import \"module\" as m with context %}{{ m.test() }}"
+    "[42|23]" [("foo", 42)] (env := importEnv),
+  renders (IM ++ "test_context_imports[from]") "{% from \"module\" import test %}{{ test() }}" "[|23]"
+    [("foo", 42)] (env := importEnv),
+  renders (IM ++ "test_context_imports[from-without]") "{% from \"module\" import test without context %}{{ test() }}"
+    "[|23]" [("foo", 42)] (env := importEnv),
+  renders (IM ++ "test_context_imports[from-with]") "{% from \"module\" import test with context %}{{ test() }}"
+    "[42|23]" [("foo", 42)] (env := importEnv),
+  compiles (IM ++ "test_import_needs_name[one]") "{% from \"foo\" import bar %}" (env := importEnv),
+  compiles (IM ++ "test_import_needs_name[two]") "{% from \"foo\" import bar, baz %}" (env := importEnv),
+  fails (IM ++ "test_import_needs_name[none]") "{% from \"foo\" import %}" isSyntax (env := importEnv),
+  fails (IM ++ "test_no_trailing_comma[1]") "{% from \"foo\" import bar, %}" isSyntax (env := importEnv),
+  fails (IM ++ "test_no_trailing_comma[2]") "{% from \"foo\" import bar,, %}" isSyntax (env := importEnv),
+  fails (IM ++ "test_no_trailing_comma[3]") "{% from \"foo\" import, %}" isSyntax (env := importEnv),
+  compiles (IM ++ "test_trailing_comma_with_context[1]") "{% from \"foo\" import bar, baz with context %}",
+  compiles (IM ++ "test_trailing_comma_with_context[2]") "{% from \"foo\" import bar, baz, with context %}",
+  compiles (IM ++ "test_trailing_comma_with_context[3]") "{% from \"foo\" import bar, with context %}",
+  compiles (IM ++ "test_trailing_comma_with_context[4]") "{% from \"foo\" import bar, with, context %}",
+  compiles (IM ++ "test_trailing_comma_with_context[5]") "{% from \"foo\" import bar, with with context %}",
+  fails (IM ++ "test_trailing_comma_with_context[6]") "{% from \"foo\" import bar,, with context %}" isSyntax,
+  fails (IM ++ "test_trailing_comma_with_context[7]") "{% from \"foo\" import bar with context, %}" isSyntax,
+  rendersT (IM ++ "test_exports") { loader := DictLoader [("m",
+      "{% macro toplevel() %}...{% endmacro %}{% macro __private() %}...{% endmacro %}{% set variable = 42 %}{% for item in [1] %}{% macro notthere() %}{% endmacro %}{% endfor %}"),
+      ("t", "{% import 'm' as m %}{{ m.toplevel() }}|{{ m.variable }}|{{ m.notthere is defined }}|{{ m.__private is defined }}")] }
+    "t" "...|42|False|False",
+  fails (IM ++ "test_not_exported") "{% from 'module' import nothing %}{{ nothing() }}" isUndefined (env := importEnv),
+  rendersG (IM ++ "test_import_with_globals[1]") importEnv "{% import \"module\" as m %}{{ m.test() }}"
+    [("foo", 42)] "[42|23]",
+  renders (IM ++ "test_import_with_globals[2]") "{% import \"module\" as m %}{{ m.test() }}" "[|23]" (env := importEnv),
+  rendersG (IM ++ "test_import_with_globals_override") importEnv
+    "{% set foo = 41 %}{% import \"module\" as m %}{{ m.test() }}" [("foo", 42)] "[42|23]",
+  rendersG (IM ++ "test_from_import_with_globals") importEnv "{% from \"module\" import test %}{{ test() }}"
+    [("foo", 42)] "[42|23]",
+  renders "tests/test_imports.py::TestIncludes::test_import_from_with_context"
+    "{% set foobar = 42 %}{% from 'a' import x with context %}{{ x() }}" "42"
+    (env := { loader := DictLoader [("a", "{% macro x() %}{{ foobar }}{% endmacro %}")] }) ]
+
+def RG := "tests/test_regression.py::TestBug::"
+
+def macroCases : List Case := [
+  renders (MA ++ "test_include") "{% from \"include\" import test %}{{ test(\"foo\") }}" "[foo]"
+    (env := { loader := DictLoader [("include", "{% macro test(foo) %}[{{ foo }}]{% endmacro %}")] }),
+  rendersT (MA ++ "test_macro_api") { loader := DictLoader [("m",
+      "{% macro foo(a, b) %}{% endmacro %}{% macro bar() %}{{ varargs }}{{ kwargs }}{% endmacro %}{% macro baz() %}{{ caller() }}{% endmacro %}"),
+      ("t", "{% import 'm' as m %}{{ m.foo.arguments }}|{{ m.foo.name }}|{{ m.foo.caller }}|{{ m.foo.catch_kwargs }}|{{ m.foo.catch_varargs }}|{{ m.bar.arguments }}|{{ m.bar.caller }}|{{ m.bar.catch_kwargs }}|{{ m.bar.catch_varargs }}|{{ m.baz.caller }}")] }
+    "t" "('a', 'b')|foo|False|False|False|()|False|True|True|True",
+  renders (MA ++ "test_varargs[kwargs]") "{% macro t() %}{{ kwargs }}{% endmacro %}{{ t(a=1) }}" "{'a': 1}",
+  fails (MA ++ "test_varargs[no-kwargs]") "{% macro t() %}x{% endmacro %}{{ t(a=1) }}" isType,
+  fails (MA ++ "test_varargs[no-varargs]") "{% macro t() %}x{% endmacro %}{{ t(1) }}" isType,
+  -- tests/test_lexnparse.py::TestSyntax::test_call, with a macro for the Python lambda
+  renders (SY ++ "test_call")
+    "{% macro foo(a, b, c, e, g) %}{{ a + b + c + e + g }}{% endmacro %}{{ foo('a', c='d', e='f', *['b'], **{'g': 'h'}) }}"
+    "abdfh",
+  -- parse_call_args: the order rules (`ensure` in jinja2/parser.py)
+  fails (SY ++ "test_call[positional-after-star]") "{{ range(*[1], 2) }}" isSyntax,
+  fails (SY ++ "test_call[kwarg-after-dstar]") "{{ dict(**{}, a=1) }}" isSyntax,
+  fails (SY ++ "test_call[star-after-dstar]") "{{ dict(**{}, *[]) }}" isSyntax,
+  fails (SY ++ "test_call[two-stars]") "{{ range(*[1], *[2]) }}" isSyntax,
+  fails (SY ++ "test_call[positional-after-kwarg]") "{{ dict(a=1, 2) }}" isSyntax,
+  renders (SY ++ "test_call[kwarg-after-star]") "{{ dict(*[], a=1) }}" "{'a': 1}",
+  renders (SY ++ "test_call[dstar-filter]") "{{ 'a-b'|replace(*['-'], **{'new': '+'}) }}" "a+b",
+  renders (RG ++ "test_call_with_args")
+    "{% macro dump_users(users) -%}<ul>{%- for user in users -%}<li><p>{{ user.username|e }}</p>{{ caller(user) }}</li>{%- endfor -%}</ul>{%- endmacro -%}{% call(user) dump_users(list_of_user) -%}<dd>{{ user.realname|e }}</dd>{% endcall %}"
+    "<ul><li><p>apo</p><dd>something else</dd></li></ul>"
+    [("list_of_user", .list [Value.ofDict [("username", "apo"), ("realname", "something else")]])],
+  rendersT (RG ++ "test_caller_scoping") { loader := DictLoader [("t",
+      "{% macro detail(icon, value) -%}{% if value -%}<p><span class=\"fa fa-fw fa-{{ icon }}\"></span>{%- if caller is undefined -%}{{ value }}{%- else -%}{{ caller(value, *varargs) }}{%- endif -%}</p>{%- endif %}{%- endmacro %}{% macro link_detail(icon, value, href) -%}{% call(value, href) detail(icon, value, href) -%}<a href=\"{{ href }}\">{{ value }}</a>{%- endcall %}{%- endmacro %}"),
+      ("u", "{% import 't' as t %}{{ t.link_detail('circle', 'Index', '/') }}")] }
+    "u" "<p><span class=\"fa fa-fw fa-circle\"></span><a href=\"/\">Index</a></p>" ]
+
 def cases : List Case := filterCases ++ testCases ++ coreCases ++ lexCases ++ inheritanceCases ++ undefinedCases ++
-  loaderCases
+  loaderCases ++ importCases ++ macroCases
 
 def main : IO UInt32 := do
   let mut failures := 0

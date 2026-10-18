@@ -157,9 +157,27 @@ status = "deviation"
 note = "Arithmetic on float literals is exact; repr of results can differ from Python's binary floats."
 
 [[requirement]]
+id = "templates.imports"
+upstream = "tests/test_imports.py"
+title = "import and from ... import, with and without context; a namespace holds exactly the public top-level names"
+status = "implemented"
+realises = ["LeanJinja2.moduleExports", "LeanJinja2.exportValue"]
+theorem = ["LeanJinja2.import_namespace"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "templates.call-args"
+upstream = "tests/test_core_tags.py::TestMacros"
+title = "macro varargs, kwargs and caller; call blocks with arguments; *args and **kwargs in calls"
+status = "tested"
+realises = ["LeanJinja2.spreadArgs", "LeanJinja2.Parse.pStarArg"]
+test = ["tests/Conformance.lean"]
+note = "Behaviour of the call protocol is tested against upstream's macro, call-block and regression tests; the parser's argument-order rules are upstream's parse_call_args checks, with a case for each."
+
+[[requirement]]
 id = "deviation.imports"
-upstream = "docs/templates.rst#import"
-title = "import / from ... import, *args/**kwargs in macros, line statements"
+upstream = "docs/templates.rst#line-statements"
+title = "line statements and line comments"
 status = "excluded"
 
 [[requirement]]

@@ -366,10 +366,32 @@ theorem expr_ne_nil {x : Expr} (hw : x.WF) : Pretty.expr x ≠ [] := by
   obtain ⟨t, tr, ht, _⟩ := expr_head x hw
   rw [ht]; simp
 
+theorem kwKey_var {k : String} (h : VarName k) : Pretty.kwKey k = [.name k, .op .assign] := by
+  obtain ⟨⟨c, cs, hs, hc, _⟩, _⟩ := h
+  unfold Pretty.kwKey
+  split
+  · rename_i he; simp only [beq_iff_eq] at he; subst he
+    simp at hs; obtain ⟨rfl, -⟩ := hs; simp [isIdentChar] at hc
+  · split
+    · rename_i _ he; simp only [beq_iff_eq] at he; subst he
+      simp at hs; obtain ⟨rfl, -⟩ := hs; simp [isIdentChar] at hc
+    · rfl
+
+theorem kwKey_ne_nil (k : String) : Pretty.kwKey k ≠ [] := by
+  unfold Pretty.kwKey; split
+  · simp
+  · split <;> simp
+
+theorem kwKey_cases (k : String) :
+    Pretty.kwKey k = [.op .mul] ∨ Pretty.kwKey k = [.op .pow] ∨ Pretty.kwKey k = [.name k, .op .assign] := by
+  unfold Pretty.kwKey; split
+  · simp
+  · split <;> simp
+
 theorem kwargs_eq_nil {kw : List (String × Expr)} : Pretty.kwargs kw = [] ↔ kw = [] := by
   cases kw with
   | nil => simp [Pretty.kwargs]
-  | cons p ps => obtain ⟨k, v⟩ := p; cases ps <;> simp [Pretty.kwargs]
+  | cons p ps => obtain ⟨k, v⟩ := p; cases ps <;> simp [Pretty.kwargs, kwKey_ne_nil]
 
 theorem exprs_eq_nil {xs : List Expr} (hw : ∀ x ∈ xs, x.WF) : Pretty.exprs xs = [] ↔ xs = [] := by
   cases xs with
@@ -413,11 +435,12 @@ theorem kwargs_ok : ∀ (kw : List (String × Expr)) (r : List TokKind),
     intro n hn
     obtain ⟨n, rfl⟩ : ∃ k, n = k + 1 := ⟨n - 1, by omega⟩
     obtain ⟨n, rfl⟩ : ∃ k, n = k + 1 := ⟨n - 1, by simp [Expr.szKw] at hn; omega⟩
-    obtain ⟨_, hwv, hov⟩ := hp (k, v) List.mem_cons_self
+    obtain ⟨hkv, hwv, hov⟩ := hp (k, v) List.mem_cons_self
+    have hkk := kwKey_var hkv
     cases kw with
     | nil =>
       have hv := hov (.op .rparen :: r) (stop_cons _ _ (by simp [contLevel])) (n + 1) (by simp [Expr.szKw] at hn ⊢; omega)
-      simp only [Pretty.kwargs, List.append_assoc, List.cons_append, List.nil_append] at hv ⊢
+      simp only [Pretty.kwargs, hkk, List.append_assoc, List.cons_append, List.nil_append] at hv ⊢
       simp [pCallArgs, isStarArg, kwKey, bind, Except.bind, hv, pArgsTail]
     | cons q qs =>
       have ih := kwargs_ok (q :: qs) r (fun p hp' => hp p (List.mem_cons_of_mem _ hp')) n
@@ -426,7 +449,7 @@ theorem kwargs_ok : ∀ (kw : List (String × Expr)) (r : List TokKind),
         (stop_cons _ _ (by simp [contLevel])) (n + 1) (by simp [Expr.szKw] at hn ⊢; omega)
       have hex : Pretty.kwargs ((k, v) :: q :: qs) =
           .name k :: .op .assign :: (Pretty.expr v ++ .op .comma :: Pretty.kwargs (q :: qs)) := by
-        obtain ⟨_, _⟩ := q; simp [Pretty.kwargs]
+        obtain ⟨_, _⟩ := q; simp [Pretty.kwargs, hkk]
       rw [hex]
       simp only [List.append_assoc, List.cons_append] at hv ih ⊢
       simp [pCallArgs, isStarArg, kwKey, bind, Except.bind, hv, pArgsTail, expect, ih]

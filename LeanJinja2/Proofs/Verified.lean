@@ -71,6 +71,8 @@ structure VerifiedSemantics where
   filterLaws : Spec.filterLaws
   /-- `filter_tojson_htmlsafe`. -/
   tojsonHtmlsafe : Spec.tojsonHtmlsafe
+  /-- `import_namespace`. -/
+  importNamespace : Spec.importNamespace
 
 theorem theVerifiedSemantics : VerifiedSemantics where
   forLoopVars := for_loop_vars
@@ -81,5 +83,6 @@ theorem theVerifiedSemantics : VerifiedSemantics where
     filter_default_defined fc, filter_escape fc, filter_escape_markup fc, filter_safe fc, filter_first fc,
     filter_last fc, filter_reverse fc⟩
   tojsonHtmlsafe := filter_tojson_htmlsafe
+  importNamespace := import_namespace
 
 end LeanJinja2

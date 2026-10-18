@@ -1,4 +1,5 @@
 import LeanJinja2.RepoImpl.Values
+import LeanJinja2.RepoImpl.AstWalk
 
 /-!
 # Runtime primitives
@@ -74,7 +75,23 @@ def lenOf (pol : UndefinedPolicy) : Value → Except ValueError Nat
 with `str()` and escaped. -/
 def escapeOf (pol : UndefinedPolicy) : Value → Except ValueError Markup
   | .markup m => .ok m
+  | .module _ _ out => .ok (LeanMarkupsafe.Markup.markSafe out)
   | v => do let s ← strOf pol v; pure (escape s)
+
+/-- Spread a call's `*args` and `**kwargs` (the parser keeps them as keyword
+entries named `*` and `**`, which no identifier can be): the iterable's items
+follow the positional arguments, the mapping's entries follow the keywords. -/
+def spreadArgs (pol : UndefinedPolicy) (heap : Heap) (av : List Value) (kv : List (String × Value)) :
+    Except ValueError (List Value × List (String × Value)) := do
+  if kv.any (fun p => p.1 == "*" || p.1 == "**") then
+    let star ← (kv.filter (·.1 == "*")).mapM (fun p => iterOf pol heap p.2)
+    let dstar ← (kv.filter (·.1 == "**")).mapM (fun p => match p.2 with
+      | .dict kvs => kvs.mapM (fun q => match q.1 with
+        | .str k => .ok (k, q.2)
+        | _ => .error (.typeError "keywords must be strings"))
+      | v => .error (.typeError s!"argument after ** must be a mapping, not {v.typeName}"))
+    pure (av ++ star.flatten, kv.filter (fun p => p.1 != "*" && p.1 != "**") ++ dstar.flatten)
+  else pure (av, kv)
 
 /-- Upstream `soft_str`: markup stays markup, anything else becomes text. -/
 def softOf (pol : UndefinedPolicy) : Value → Except ValueError SoftString
@@ -129,7 +146,15 @@ def pyAttr (heap : Heap) (v : Value) (a : String) : Option Value :=
   | .tuple _ => if a == "index" || a == "count" then some (.method v a) else none
   | .loop i len d p nx r c => loopAttr i len d p nx r c a
   | .ns addr => ((heap[addr]?).getD []).lookup a
-  | .macro n .. => if a == "name" then some (.str n) else none
+  | .macro n ps body uc .. =>
+    match a with
+    | "name" => some (.str n)
+    | "arguments" => some (.tuple (ps.map (fun p => .str p.1)))
+    | "caller" => some (.bool uc)
+    | "catch_kwargs" => some (.bool (mentionsName "kwargs" body))
+    | "catch_varargs" => some (.bool (mentionsName "varargs" body))
+    | _ => none
+  | .module _ exports _ => exports.lookup a
   | _ => none
 
 /-- Python `obj[key]` only (no attribute fallback); `none` if missing. -/

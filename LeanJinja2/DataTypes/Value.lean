@@ -61,10 +61,12 @@ inductive Value where
   | tuple (items : List Value)
   /-- An insertion-ordered mapping. -/
   | dict (items : List (Value × Value))
-  /-- A macro: name, parameters, body, whether it uses `caller`, and the
-  variables it closed over. -/
+  /-- A macro: name, parameters, body, whether it uses `caller`, the
+  variables it closed over, and the template context it was exported with
+  (`none` while it is used in the template that defines it, which then
+  supplies its context; an imported macro keeps its module's). -/
   | macro (name : String) (params : List Param) (body : List Node) (usesCaller : Bool)
-      (closure : List (String × Value))
+      (closure : List (String × Value)) (context : Option (List (String × Value)))
   /-- A function provided by the environment, by name. -/
   | native (name : String)
   /-- A bound method of a builtin value. -/
@@ -76,6 +78,9 @@ inductive Value where
   | superRef (name : String) (depth : Nat)
   /-- A `namespace()` object, by heap address. -/
   | ns (addr : Nat)
+  /-- An imported template (upstream `TemplateModule`): its name, the names it
+  exports (top-level macros and `set`s) and its rendered output. -/
+  | module (name : String) (exports : List (String × Value)) (output : String)
   deriving Inhabited
 
 /-- A function the host provides (a global, a custom filter or test): it

@@ -284,14 +284,16 @@ theorem kwargs_bal : (kw : List (String × Expr)) → Bal (Pretty.kwargs kw)
     have h := expr_bal v
     intro st rest
     simp only [Pretty.kwargs, List.append_assoc, List.cons_append, List.nil_append, List.singleton_append]
-    simp [Pretty.expr, stackStep, closerOf, isCloser, Pretty.constToks, Pretty.binTok, Pretty.cmpTok, h]
+    rcases kwKey_cases k with h0 | h0 | h0 <;>
+      simp [h0, Pretty.expr, stackStep, closerOf, isCloser, Pretty.constToks, Pretty.binTok, Pretty.cmpTok, h]
   | (k, v) :: q :: qs => by
     have h1 := expr_bal v
     have h2 := kwargs_bal (q :: qs)
     obtain ⟨a, b⟩ := q
     intro st rest
     simp only [Pretty.kwargs, List.append_assoc, List.cons_append, List.nil_append, List.singleton_append] at h2 ⊢
-    simp [Pretty.expr, stackStep, closerOf, isCloser, Pretty.constToks, Pretty.binTok, Pretty.cmpTok, h1, h2]
+    rcases kwKey_cases k with h0 | h0 | h0 <;>
+      simp [h0, Pretty.expr, stackStep, closerOf, isCloser, Pretty.constToks, Pretty.binTok, Pretty.cmpTok, h1, h2]
 end
 
 end LeanJinja2
@@ -493,13 +495,13 @@ theorem kwargs_inner : (kw : List (String × Expr)) → Expr.WFKw kw → InnerAl
   | [], _ => by simp [Pretty.kwargs]
   | [(k, v)], hw => by
     simp only [Expr.WFKw] at hw
-    simp [Pretty.kwargs, InnerTok, expr_inner v hw.2.1, hw.1.1]
+    simp [Pretty.kwargs, kwKey_var hw.1, InnerTok, expr_inner v hw.2.1, hw.1.1]
   | (k, v) :: q :: qs, hw => by
     simp only [Expr.WFKw] at hw
     have h2 := kwargs_inner (q :: qs) hw.2.2
     obtain ⟨a, b⟩ := q
     simp only [Pretty.kwargs] at h2 ⊢
-    simp [InnerTok, expr_inner v hw.2.1, hw.1.1, h2]
+    simp [kwKey_var hw.1, InnerTok, expr_inner v hw.2.1, hw.1.1, h2]
 end
 
 end LeanJinja2

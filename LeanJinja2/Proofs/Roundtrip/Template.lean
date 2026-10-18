@@ -210,6 +210,30 @@ theorem startsTag_append {a b : List TokKind} (h : StartsTag a) : StartsTag (a +
   | nil => simp at h
   | cons x xs => simpa using h
 
+theorem lexOK_ctx (wc : Bool) : LexOK [Pretty.nm (if wc then "with" else "without"), Pretty.nm "context"] := by
+  cases wc
+  · simpa using lexOK_append (lexOK_kw "without") (lexOK_kw "context")
+  · simpa using lexOK_append (lexOK_kw "with") (lexOK_kw "context")
+
+theorem lexOK_importName (p : String × Option String) (h : ImportNameWF p) :
+    LexOK (Pretty.importName p) := by
+  obtain ⟨n, a⟩ := p
+  obtain ⟨hn, -, ha⟩ := h
+  cases a with
+  | none => exact lexOK_name hn.1
+  | some a =>
+    simpa [Pretty.importName] using
+      lexOK_append (lexOK_append (lexOK_name hn.1) (lexOK_kw "as")) (lexOK_name (ha a rfl).1)
+
+theorem lexOK_importNames : (names : List (String × Option String)) → (∀ p ∈ names, ImportNameWF p) →
+    LexOK (Pretty.importNames names)
+  | [], _ => lexOK_nil
+  | [p], h => lexOK_importName p (h p (by simp))
+  | p :: q :: qs, h => by
+    have := lexOK_append (lexOK_append (lexOK_importName p (h p (by simp))) (lexOK_op (o := .comma) rfl rfl))
+      (lexOK_importNames (q :: qs) (fun r hr => h r (by simp_all)))
+    simpa [Pretty.importNames, Pretty.op, List.append_assoc] using this
+
 mutual
 theorem node_stream : (nd : Node) → nd.WF → Stream (Pretty.node nd)
   | .text s, hw => by simpa [Pretty.node] using Stream.text s hw
@@ -306,6 +330,18 @@ theorem node_stream : (nd : Node) → nd.WF → Stream (Pretty.node nd)
     simp only [Node.WF] at hw
     have := Stream.block (lexOK_append (lexOK_kw "extends") (lexOK_expr hw)) (by simpa using blockHead_kw "extends" _)
       Stream.nil
+    simpa [Pretty.node, List.append_assoc] using this
+  | .import_ e t wc, hw => by
+    simp only [Node.WF] at hw
+    have hk := lexOK_append (lexOK_append (lexOK_append (lexOK_append (lexOK_kw "import") (lexOK_expr hw.1))
+      (lexOK_kw "as")) (lexOK_name hw.2.1)) (lexOK_ctx wc)
+    have := Stream.block hk (by simpa using blockHead_kw "import" _) Stream.nil
+    simpa [Pretty.node, List.append_assoc] using this
+  | .fromImport e names wc, hw => by
+    simp only [Node.WF] at hw
+    have hk := lexOK_append (lexOK_append (lexOK_append (lexOK_append (lexOK_kw "from") (lexOK_expr hw.1))
+      (lexOK_kw "import")) (lexOK_importNames names hw.2)) (lexOK_ctx wc)
+    have := Stream.block hk (by simpa using blockHead_kw "from" _) Stream.nil
     simpa [Pretty.node, List.append_assoc] using this
   | .block n sc req body, hw => by
     simp only [Node.WF] at hw

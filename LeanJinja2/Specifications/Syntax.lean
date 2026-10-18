@@ -93,6 +93,11 @@ def Target.Settable : Target → Prop
 
 def FilterCall.WF (f : FilterCall) : Prop := VarName f.name ∧ Expr.WFs f.args ∧ Expr.WFKw f.kwargs
 
+/-- A name a `from` import can print: an identifier the parser accepts as a
+name (not a constant, not private), with an identifier alias. -/
+def ImportNameWF (p : String × Option String) : Prop :=
+  VarName p.1 ∧ p.1.startsWith "_" = false ∧ ∀ a, p.2 = some a → VarName a
+
 /-- Parameters: names, defaults well-formed, no parameter without a default
 after one with. -/
 def ParamsWF : Bool → List Param → Prop
@@ -122,6 +127,8 @@ def Node.WF : Node → Prop
     ParamsWF false ps ∧ (∃ f args kw, c = .call f args kw) ∧ c.WF ∧ Node.BodyWF body
   | .include e _ _ => e.WF
   | .extends e => e.WF
+  | .import_ e t _ => e.WF ∧ VarName t
+  | .fromImport e names _ => e.WF ∧ ∀ p ∈ names, ImportNameWF p
   | .block n _ req body => VarName n ∧ Node.BodyWF body ∧ (req = true → Parse.onlyWhitespace body = true)
   | .with_ as body => Node.AssignsWF as ∧ Node.BodyWF body
   | .filterBlock fs body => fs ≠ [] ∧ (∀ f ∈ fs, f.WF) ∧ Node.BodyWF body

@@ -320,7 +320,7 @@ def joinFilter (fc : FCtx) (items : List Value) (d : Value) : Except ValueError 
       let ms ← items.mapM (escapeOf fc.pol)
       pure (.markup (Markup.joinMarkup m ms))
     | _ =>
-      if items.any Value.isMarkup then do
+      if items.any Value.hasHtml then do
         let sep ← strOf fc.pol d
         let ms ← items.mapM (escapeOf fc.pol)
         pure (.markup (Markup.joinMarkup (escape sep) ms))

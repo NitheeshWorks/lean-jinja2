@@ -58,15 +58,18 @@ def Value.display (pol : UndefinedPolicy) (v : Value) : String :=
   | .error _ => ""
 
 /-- The text a piece contributes when autoescaping: literal text as is; a
-markup value as its own text; any other value as the escape of its text. -/
+value with `__html__` (markup, an imported module) as its own text; any
+other value as the escape of its text. -/
 def Piece.escaped (pol : UndefinedPolicy) : Piece → String
   | .lit s => s
   | .value (.markup m) _ => m.str
+  | .value (.module _ _ out) _ => out
   | .value v _ => (escape (v.display pol)).str
 
-/-- An interpolated piece whose value is not markup. -/
+/-- An interpolated piece whose value has no `__html__`. -/
 def Piece.IsPlainValue : Piece → Prop
   | .value (.markup _) _ => False
+  | .value (.module ..) _ => False
   | .value _ _ => True
   | .lit _ => False
 

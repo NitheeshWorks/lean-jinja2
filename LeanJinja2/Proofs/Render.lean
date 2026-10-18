@@ -212,7 +212,7 @@ def Inv (env : Environment) (L : String → Prop) (ae : Bool) (n : Nat) : Prop :
   (∀ fr b i locals s ps s', FrameOK L ae fr →
      renderBlockAt env n fr b i locals s = .ok (ps, s') → TraceOK L ae ps) ∧
   (∀ base name body s ps s', (∀ p ∈ base.overrides, ∀ be ∈ p.2, EntryOK L ae be) → BodyOK L ae body →
-     renderTemplate env n base name body s = .ok (ps, s') → TraceOK L ae ps)
+     renderTemplate env n base name body s = .ok (ps, s') → TraceOK L ae ps.1)
 
 theorem TraceOK.chunks {L ae} {cs : List (List Piece)} (h : ∀ c ∈ cs, TraceOK L ae c) :
     TraceOK L ae cs.reverse.flatten := by
@@ -292,8 +292,8 @@ theorem inv_node_step {env L ae n} (hE : EnvOK env L ae) (ih : Inv env L ae n) :
   | callBlock ps c body =>
     cases c
     case call f args kw =>
-      simp only [renderNode, StateT.run_bind_ok, StateT.run_pure_ok] at h
-      obtain ⟨_, _, -, _, _, -, _, _, -, _, _, -, rfl, -⟩ := h
+      simp only [renderNode, StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok] at h
+      obtain ⟨_, _, -, _, _, -, _, _, -, _, _, -, _, _, -, _, _, -, rfl, -⟩ := h
       refine ⟨?_, Same.refl fr⟩
       intro p hp; simp at hp; subst hp; exact hf.2.2
     all_goals simp [renderNode] at h
@@ -312,6 +312,15 @@ theorem inv_node_step {env L ae n} (hE : EnvOK env L ae) (ih : Inv env L ae n) :
       obtain ⟨body, _, ⟨hc, rfl⟩, ps, _, ht, rfl, -⟩ := h
       exact ⟨ih.2.2.2.2 _ _ body _ ps _ (by simp) (hE.1 nm src body (findSome_source hfs) hc) ht,
         Same.refl fr⟩
+  | import_ e t wc =>
+    simp only [renderNode, StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok, liftE_ok] at h
+    obtain ⟨_, _, -, _, _, ⟨-, rfl⟩, _, _, ⟨-, rfl⟩, _, _, ⟨-, rfl⟩, ⟨ps, ctx'⟩, _, -, _, _, ⟨-, rfl⟩, f', _, ha, rfl, -⟩ := h
+    exact ⟨TraceOK.nil, assignTo_same env n fr _ _ _ f' _ ha⟩
+  | fromImport e names wc =>
+    simp only [renderNode, StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok, liftE_ok] at h
+    obtain ⟨_, _, -, _, _, ⟨-, rfl⟩, _, _, ⟨-, rfl⟩, _, _, ⟨-, rfl⟩, ⟨ps, ctx'⟩, _, -, _, _, ⟨-, rfl⟩, f', _, ha, rfl, -⟩ := h
+    refine ⟨TraceOK.nil, foldlM_inv (fun f => Same fr f) _ _
+      (fun b p s b' s' _ hb hstep => hb.trans (assignTo_same env n b _ _ s b' s' hstep)) fr _ f' _ (Same.refl fr) ha⟩
   | «extends» e =>
     simp only [renderNode] at h
     split at h
@@ -397,7 +406,7 @@ theorem inv_block_step {env L ae n} (ih : Inv env L ae n) :
 
 theorem inv_tmpl_step {env L ae n} (hE : EnvOK env L ae) (ih : Inv env L ae n) :
     ∀ base name body s ps s', (∀ p ∈ base.overrides, ∀ be ∈ p.2, EntryOK L ae be) → BodyOK L ae body →
-     renderTemplate env (n + 1) base name body s = .ok (ps, s') → TraceOK L ae ps := by
+     renderTemplate env (n + 1) base name body s = .ok (ps, s') → TraceOK L ae ps.1 := by
   intro base name body s ps s' ho hb h
   simp only [renderTemplate, StateT.run_bind_ok] at h
   obtain ⟨⟨ps1, f1⟩, s1, hr, h⟩ := h
@@ -470,13 +479,13 @@ theorem render_literals (t : Template) (vars : List (String × Value)) (ps : Lis
     | autoescapeTag => rfl
   exact renderTrace_inv hE hb h _ hs
 
-theorem escapeOf_nonmarkup {pol : UndefinedPolicy} {v : Value} (hv : v.isMarkup = false) :
+theorem escapeOf_nonmarkup {pol : UndefinedPolicy} {v : Value} (hv : v.hasHtml = false) :
     escapeOf pol v = (strOf pol v >>= fun s => pure (escape s)) := by
-  cases v <;> simp_all [escapeOf, Value.isMarkup]
+  cases v <;> simp_all [escapeOf, Value.hasHtml]
 
-theorem escaped_nonmarkup {pol : UndefinedPolicy} {v : Value} {e : Bool} (hv : v.isMarkup = false) :
+theorem escaped_nonmarkup {pol : UndefinedPolicy} {v : Value} {e : Bool} (hv : v.hasHtml = false) :
     Piece.escaped pol (.value v e) = (escape (v.display pol)).str := by
-  cases v <;> simp_all [Piece.escaped, Value.isMarkup]
+  cases v <;> simp_all [Piece.escaped, Value.hasHtml]
 
 /-- An escaped piece's text is its escaped reading. -/
 theorem Piece.text_escaped {pol : UndefinedPolicy} {p : Piece} {t : String}
@@ -487,10 +496,11 @@ theorem Piece.text_escaped {pol : UndefinedPolicy} {p : Piece} {t : String}
   | value v esc =>
     have := hp v esc rfl
     subst this
-    cases hm : v.isMarkup with
+    cases hm : v.hasHtml with
     | true =>
-      cases v <;> simp [Value.isMarkup] at hm
-      simp [Piece.text, escapeOf, Functor.map, Except.map] at h; simp [Piece.escaped, h]
+      cases v <;> simp [Value.hasHtml] at hm
+      all_goals simp [Piece.text, escapeOf, Functor.map, Except.map] at h
+      all_goals simp [Piece.escaped, ← h]
     | false =>
       rw [escaped_nonmarkup hm]
       simp only [Piece.text, escapeOf_nonmarkup hm, bind, Except.bind] at h
@@ -556,6 +566,7 @@ theorem autoescape_escaped (pol : UndefinedPolicy) (p : Piece) (hp : p.IsPlainVa
   | value v esc =>
     cases v with
     | markup _ => cases hp
+    | module _ _ _ => cases hp
     | _ => exact escape_sound _
 
 /-- `markup_passthrough`: an interpolated markup value contributes its own

@@ -147,4 +147,83 @@ theorem loopValues_eq (items : List Value) (d : Nat) (r : Option LoopRec) (c : N
   simpa [loopValues] using loopValues_go items d r c items [] rfl
 
 
+/-! ## Imports -/
+
+theorem nodup_eraseDups (l : List String) : l.eraseDups.Nodup := by
+  induction h : l.length using Nat.strongRecOn generalizing l with
+  | _ n ih =>
+  cases l with
+  | nil => simp
+  | cons a as =>
+    rw [List.eraseDups_cons]
+    refine List.nodup_cons.mpr ⟨?_, ih _ (by simp at h; have := List.length_filter_le (fun b => !b == a) as; omega) _ rfl⟩
+    rw [List.mem_eraseDups]; simp
+
+theorem lookup_filter_key {β : Type} (P : String → Bool) (l : List (String × β)) (k : String) :
+    (l.filter (fun p => P p.1)).lookup k = if P k then l.lookup k else none := by
+  induction l with
+  | nil => simp
+  | cons p ps ih =>
+    obtain ⟨k', v⟩ := p
+    by_cases hk : k = k'
+    · subst hk; by_cases hp : P k <;> simp [List.filter, hp, List.lookup, ih]
+    · have : (k == k') = false := by simpa using hk
+      by_cases hp : P k' <;> simp [List.filter, hp, List.lookup, this, ih]
+
+theorem lookup_filterMap_keys {β γ : Type} (f : String → Option β) (g : β → γ) (names : List String)
+    (k : String) :
+    (names.filterMap (fun k' => (f k').map fun v => (k', g v))).lookup k =
+      if k ∈ names then (f k).map g else none := by
+  induction names with
+  | nil => simp
+  | cons k' ns ih =>
+    by_cases hk : k = k'
+    · subst hk
+      cases hf : f k with
+      | none => simp [List.filterMap, hf, ih]
+      | some v => simp [List.filterMap, hf, List.lookup]
+    · have : (k == k') = false := by simpa using hk
+      cases hf : f k' <;> simp [List.filterMap, hf, List.lookup, this, ih, hk]
+
+theorem keys_filterMap_sublist {β γ : Type} (f : String → Option β) (g : β → γ) (names : List String) :
+    ((names.filterMap (fun k' => (f k').map fun v => (k', g v))).map Prod.fst).Sublist names := by
+  induction names with
+  | nil => simp
+  | cons k' ns ih =>
+    cases hf : f k' with
+    | none => simp [List.filterMap, hf]; exact ih.cons _
+    | some v => simpa [List.filterMap, hf] using ih.cons_cons k'
+
+theorem lookup_none_of_not_mem {β : Type} (l : List (String × β)) (k : String) (h : k ∉ l.map Prod.fst) :
+    l.lookup k = none := by
+  induction l with
+  | nil => rfl
+  | cons p ps ih =>
+    obtain ⟨k', v⟩ := p
+    have hk : (k == k') = false := by simp at h; simpa using h.1
+    simp only [List.lookup, hk]; exact ih (by simp at h ⊢; exact h.2)
+
+/-- `import_namespace`: an import's namespace has each name once, and holds
+exactly the module's public top-level assignments. -/
+theorem import_namespace (start : Nat) (ctx : List (String × Value)) :
+    ((moduleExports start ctx).map Prod.fst).Nodup ∧
+    ∀ k, (moduleExports start ctx).lookup k =
+      if k.startsWith "_" then none else ((ctx.take (ctx.length - start)).lookup k).map (exportValue ctx) := by
+  unfold moduleExports
+  simp only []
+  refine ⟨(keys_filterMap_sublist _ (exportValue ctx) _).nodup (nodup_eraseDups _), fun k => ?_⟩
+  rw [lookup_filterMap_keys (g := exportValue ctx)]
+  simp only [List.mem_eraseDups]
+  generalize hF : (ctx.take (ctx.length - start)).filter (fun p => !p.1.startsWith "_") = F
+  have hL := lookup_filter_key (fun s => !s.startsWith "_") (ctx.take (ctx.length - start)) k
+  simp only [hF] at hL
+  split
+  · rename_i hm
+    rw [hL]; cases k.startsWith "_" <;> simp
+  · rename_i hm
+    rw [lookup_none_of_not_mem F k hm] at hL
+    split at hL
+    · rename_i hs; simp at hs; simp [hs, ← hL]
+    · rename_i hs; simp at hs; simp [hs]
+
 end LeanJinja2

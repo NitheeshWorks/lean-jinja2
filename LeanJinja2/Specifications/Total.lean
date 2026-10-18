@@ -10,8 +10,8 @@ calling back into template code: a macro (or `caller`), `super()` or
 that does none of that, here `nodesNonrec`, renders within a budget linear in
 its nesting depth (`renderBudget`), and that is `render_total`.
 
-`nodesNonrec` allows every tag except `include`, `extends`, `macro` and
-`call`, and allows calls only to the builtin globals `range`, `dict` and
+`nodesNonrec` allows every tag except `include`, `extends`, `import`,
+`from`, `macro` and `call`, and allows calls only to the builtin globals `range`, `dict` and
 `namespace`, by name, which the template never rebinds. Filters, tests and
 attribute access are unrestricted: the value layer has no way to raise
 `RecursionError` (`ValueError` has no such constructor), so they need no
@@ -106,7 +106,7 @@ def Node.nonrec : Node → Bool
     t.nonrec && it.nonrec && optNonrec f && nodesNonrec body && nodesNonrec els
   | .set t e => t.nonrec && e.nonrec
   | .setBlock t fs body => t.nonrec && chainNonrec fs && nodesNonrec body
-  | .macro .. | .callBlock .. | .include .. | .extends _ => false
+  | .macro .. | .callBlock .. | .include .. | .extends _ | .import_ .. | .fromImport .. => false
   | .block _ _ _ body => nodesNonrec body
   | .with_ as body => assignsNonrec as && nodesNonrec body
   | .filterBlock fs body => chainNonrec fs && nodesNonrec body

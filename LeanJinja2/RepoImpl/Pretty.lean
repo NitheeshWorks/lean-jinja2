@@ -47,6 +47,11 @@ def joinArgs (pos kw : List TokKind) : List TokKind :=
 def parenArgs (pos kw : List TokKind) : List TokKind :=
   if pos.isEmpty && kw.isEmpty then [] else [op .lparen] ++ joinArgs pos kw ++ [op .rparen]
 
+/-- A keyword argument's head: `k =`, or `*` / `**` for the spread
+arguments the parser keeps under those names. -/
+def kwKey (k : String) : List TokKind :=
+  if k == "*" then [op .mul] else if k == "**" then [op .pow] else [nm k, op .assign]
+
 mutual
 /-- An expression: an atom, or a compound in parentheses. -/
 def expr : Expr → List TokKind
@@ -110,8 +115,8 @@ def tildes : List Expr → List TokKind
 
 def kwargs : List (String × Expr) → List TokKind
   | [] => []
-  | [(k, v)] => [nm k, op .assign] ++ expr v
-  | (k, v) :: kw => [nm k, op .assign] ++ expr v ++ [op .comma] ++ kwargs kw
+  | [(k, v)] => kwKey k ++ expr v
+  | (k, v) :: kw => kwKey k ++ expr v ++ [op .comma] ++ kwargs kw
 end
 
 /-- An assignment target: a name, `ns.attr`, or a parenthesised tuple. -/
@@ -151,6 +156,17 @@ def assigns : List (Target × Expr) → List TokKind
 /-- A block tag `{% ... %}` around its tokens. -/
 def tag (ks : List TokKind) : List TokKind := [.blockBegin] ++ ks ++ [.blockEnd]
 
+/-- One imported name and its alias. -/
+def importName : String × Option String → List TokKind
+  | (n, none) => [nm n]
+  | (n, some a) => [nm n, nm "as", nm a]
+
+/-- The names of a `from` import, comma separated. -/
+def importNames : List (String × Option String) → List TokKind
+  | [] => []
+  | [p] => importName p
+  | p :: ps => importName p ++ [op .comma] ++ importNames ps
+
 mutual
 /-- A node's significant tokens. -/
 def node : Node → List TokKind
@@ -177,6 +193,11 @@ def node : Node → List TokKind
     tag ([nm "include"] ++ expr e ++ (if ig then [nm "ignore", nm "missing"] else []) ++
       [nm (if wc then "with" else "without"), nm "context"])
   | .extends e => tag ([nm "extends"] ++ expr e)
+  | .import_ e t wc =>
+    tag ([nm "import"] ++ expr e ++ [nm "as", nm t, nm (if wc then "with" else "without"), nm "context"])
+  | .fromImport e names wc =>
+    tag ([nm "from"] ++ expr e ++ [nm "import"] ++ importNames names ++
+      [nm (if wc then "with" else "without"), nm "context"])
   | .block n sc req body =>
     tag ([nm "block", nm n] ++ (if sc then [nm "scoped"] else []) ++ (if req then [nm "required"] else [])) ++
       nodes body ++ tag [nm "endblock"]

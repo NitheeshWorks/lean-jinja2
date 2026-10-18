@@ -31,7 +31,7 @@ theorem exprs_nil' : (xs : List Expr) → Pretty.exprs xs = [] → xs = []
 
 theorem kwargs_nil' : (kw : List (String × Expr)) → Pretty.kwargs kw = [] → kw = []
   | [], _ => rfl
-  | [(k, v)], h => by simp [Pretty.kwargs] at h
+  | [(k, v)], h => by simp [Pretty.kwargs, kwKey_ne_nil] at h
   | (k, v) :: (k', v') :: kw, h => by simp [Pretty.kwargs] at h
 
 theorem parenArgs_length (args : List Expr) (kw : List (String × Expr))
@@ -191,9 +191,11 @@ theorem kwargs_length : (kw : List (String × Expr)) → Expr.szKw kw ≤ (Prett
   | [] => by simp [Expr.szKw, Pretty.kwargs]
   | [(k, v)] => by
     have := expr_length v
+    have := List.length_pos_iff.mpr (kwKey_ne_nil k)
     simp [Expr.szKw, Pretty.kwargs]; omega
   | (k, v) :: q :: qs => by
     have := expr_length v
+    have := List.length_pos_iff.mpr (kwKey_ne_nil k)
     have := kwargs_length (q :: qs)
     obtain ⟨a, b⟩ := q
     simp only [Expr.szKw, Pretty.kwargs, List.length_append, List.length_cons, List.length_nil] at *; omega

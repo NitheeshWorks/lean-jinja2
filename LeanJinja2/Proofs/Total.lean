@@ -450,7 +450,7 @@ theorem Good.eval_step : ∀ fr e, FrOK fr → e.nonrec = true → e.depth < n +
     refine Safe.bind' (evalE_global env k h hg) fun fv hfv => ?_
     refine Safe.bindT (ih.evals h ha (by omega)) fun av => ?_
     refine Safe.bindT (ih.evalKw h hk (by omega)) fun kv => ?_
-    exact ih.call fr fv av kv hfv (by omega)
+    exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun p => ih.call fr fv p.1 p.2 hfv (by omega)
   case h_18 x ops =>
     refine Safe.bindT (ih.eval fr x h hn.1 (by omega)) fun lv => ?_
     refine Safe.bindT Safe.get' fun hp => ?_
@@ -524,7 +524,7 @@ theorem Good.chain_step : ∀ fr fs v, FrOK fr → chainNonrec fs = true → cha
   have hm := chain_mem hf
   refine Safe.bindT (ih.evals h (hm.1 hn).1 (by omega)) fun _ => ?_
   refine Safe.bindT (ih.evalKw h (hm.1 hn).2 (by omega)) fun _ => ?_
-  exact Safe.bindT Safe.get' fun _ => Safe.liftT
+  exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun _ => Safe.liftT
 
 omit ih in
 /-- Binding a non-recursive target makes plain locals. -/
@@ -631,6 +631,8 @@ theorem Good.node_step : ∀ fr nd, FrOK fr → nd.nonrec = true → 3 * nd.dept
   | callBlock => simp [Node.nonrec] at hn
   | «include» => simp [Node.nonrec] at hn
   | «extends» => simp [Node.nonrec] at hn
+  | import_ => simp [Node.nonrec] at hn
+  | fromImport => simp [Node.nonrec] at hn
   | block nm sc req body =>
     simp only [Node.nonrec, Node.depth] at hn hd
     simp only [renderNode]
@@ -737,7 +739,7 @@ theorem render_total (t : Template) (vars : List (String × Value)) (hn : nodesN
     have : e ≠ .fuelExhausted := fun he => hs.1 (he ▸ hr)
     simpa [bind, Except.bind] using this
   | ok r =>
-    cases hf : Piece.flatten t.env.undefined r.1 with
+    cases hf : Piece.flatten t.env.undefined r.1.1 with
     | ok _ => simp [bind, Except.bind, hf, Except.mapError]
     | error e => simpa [bind, Except.bind, hf, Except.mapError] using Safe.toRenderError_ne e
 

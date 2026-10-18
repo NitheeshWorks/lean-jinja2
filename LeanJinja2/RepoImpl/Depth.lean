@@ -98,7 +98,7 @@ def Node.depth : Node → Nat
   | .setBlock t fs body => max (max t.depth (chainDepth fs)) (nodesDepth body) + 1
   | .macro _ ps body => max (paramsDepth ps) (nodesDepth body) + 1
   | .callBlock ps c body => max (max (paramsDepth ps) c.depth) (nodesDepth body) + 1
-  | .include e _ _ | .extends e => e.depth + 1
+  | .include e _ _ | .extends e | .import_ e _ _ | .fromImport e _ _ => e.depth + 1
   | .block _ _ _ body => nodesDepth body + 1
   | .with_ as body => max (assignsDepth as) (nodesDepth body) + 1
   | .filterBlock fs body => max (chainDepth fs) (nodesDepth body) + 1

@@ -471,18 +471,17 @@ def kwKey : List TokKind → Option (String × List TokKind)
   | .name k :: .op .assign :: r => some (k, r)
   | _ => none
 
-/-- `*args` or `**kwargs` (not supported). -/
+/-- `*args` or `**kwargs` next. -/
 def isStarArg : Option TokKind → Bool
   | some (.op .mul) | some (.op .pow) => true
   | _ => false
 
-/-- `parse_call_args` after `(`, up to and including `)`. `*args`/`**kwargs`
-are not supported. -/
+/-- `parse_call_args` after `(`, up to and including `)`. -/
 def pCallArgs : Nat → List TokKind → PR (List Expr × List (String × Expr))
   | 0, ts => deep ts
   | n + 1, ts =>
     if isOp .rparen ts.head? then .ok (([], []), ts.tail)
-    else if isStarArg ts.head? then fail "*args and **kwargs are not supported" ts
+    else if isStarArg ts.head? then pStarArg n ts
     else match kwKey ts with
       | some (k, r) => do
         let (v, r) ← pExpr n true r
@@ -493,6 +492,25 @@ def pCallArgs : Nat → List TokKind → PR (List Expr × List (String × Expr))
         let (v, r) ← pExpr n true ts
         let (rest, r) ← pArgsTail n r
         .ok ((v :: rest.1, rest.2), r)
+
+/-- `*args` or `**kwargs` in a call, kept as a keyword entry named `*` or
+`**`. Upstream's order: positional arguments, then keywords and one `*args`,
+then one `**kwargs` last. -/
+def pStarArg : Nat → List TokKind → PR (List Expr × List (String × Expr))
+  | 0, ts => deep ts
+  | n + 1, ts =>
+    match ts with
+    | .op .mul :: r => do
+      let (v, r) ← pExpr n true r
+      let (rest, r) ← pArgsTail n r
+      if rest.1.isEmpty && !(rest.2.any (·.1 == "*")) then .ok (([], ("*", v) :: rest.2), r)
+      else fail "invalid syntax for function call expression" r
+    | .op .pow :: r => do
+      let (v, r) ← pExpr n true r
+      let (rest, r) ← pArgsTail n r
+      if rest.1.isEmpty && rest.2.isEmpty then .ok (([], [("**", v)]), r)
+      else fail "invalid syntax for function call expression" r
+    | _ => fail "invalid syntax for function call expression" ts
 
 /-- After an argument: `)` or `,` and more arguments. -/
 def pArgsTail : Nat → List TokKind → PR (List Expr × List (String × Expr))
@@ -698,6 +716,47 @@ def statementKeywords : List String :=
   ["for", "if", "block", "extends", "print", "macro", "include", "from", "import", "set",
    "with", "autoescape", "call", "filter"]
 
+/-- `with context` or `without context` next. -/
+def isContextAt : List TokKind → Bool
+  | .name "with" :: .name "context" :: _ | .name "without" :: .name "context" :: _ => true
+  | _ => false
+
+/-- `parse_import_context`: an optional `with`/`without context`. -/
+def importContext (dflt : Bool) : List TokKind → Bool × List TokKind
+  | .name "with" :: .name "context" :: r => (true, r)
+  | .name "without" :: .name "context" :: r => (false, r)
+  | ts => (dflt, ts)
+
+/-- The names of `{% from ... import ... %}` (upstream `parse_from`): comma
+separated, each with an optional `as alias`, a trailing comma allowed only
+before `with`/`without context`. Returns the names and the context flag. -/
+def pFromNames : Nat → List (String × Option String) → List TokKind →
+    PR (List (String × Option String) × Bool)
+  | 0, _, ts => deep ts
+  | k + 1, acc, ts => do
+    let ((), ts) ← if acc.isEmpty then .ok ((), ts) else expect (.op .comma) ts
+    match ts with
+    | .name _ :: _ =>
+      if isContextAt ts then
+        let (w, r) := importContext false ts
+        .ok ((acc.reverse, w), r)
+      else do
+        let (nm, ts) ← pParamName ts
+        if nm.startsWith "_" then fail "names starting with an underline can not be imported" ts else
+        let (alias, ts) ← if isName "as" ts.head? then do
+            let (a, ts) ← pParamName ts.tail
+            .ok (some a, ts)
+          else .ok (none, ts)
+        let acc := (nm, alias) :: acc
+        if isContextAt ts then
+          let (w, r) := importContext false ts
+          .ok ((acc.reverse, w), r)
+        else if isOp .comma ts.head? then pFromNames k acc ts
+        else .ok ((acc.reverse, false), ts)
+    | _ => do
+      let (_, _) ← expectName ts
+      fail "expected token 'name'" ts
+
 mutual
 
 /-- `subparse(end_tokens)`: nodes up to an end tag (the remaining tokens
@@ -823,8 +882,17 @@ def pStatement : Nat → TagStack → List TokKind → PR (List Node)
     | .name "print" :: r => do
       let (es, r) ← pPrintItems n true r
       .ok (es.map Node.output, r)
-    | .name "import" :: _ | .name "from" :: _ =>
-      fail "'import' and 'from' are not supported by lean-jinja2" ts
+    | .name "import" :: r => do
+      let (e, r) ← pExpr n true r
+      let ((), r) ← expect (.name "as") r
+      let (target, r) ← pParamName r
+      let (wc, r) := importContext false r
+      .ok ([.import_ e target wc], r)
+    | .name "from" :: r => do
+      let (e, r) ← pExpr n true r
+      let ((), r) ← expect (.name "import") r
+      let ((names, wc), r) ← pFromNames n [] r
+      .ok ([.fromImport e names wc], r)
     | .name s :: _ => failUnknownOrEof (some s) stack ts
     | _ => fail "tag name expected" ts
 

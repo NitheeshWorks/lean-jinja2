@@ -106,6 +106,10 @@ inductive Node where
   | include (template : Expr) (ignoreMissing : Bool) (withContext : Bool)
   /-- `{% extends e %}`. -/
   | extends (template : Expr)
+  /-- `{% import e as target with context %}`. -/
+  | import_ (template : Expr) (target : String) (withContext : Bool)
+  /-- `{% from e import a as b, c with context %}`: each name and its alias. -/
+  | fromImport (template : Expr) (names : List (String × Option String)) (withContext : Bool)
   /-- `{% block name scoped required %}body{% endblock %}`. -/
   | block (name : String) (isScoped : Bool) (required : Bool) (body : List Node)
   /-- `{% with t1 = e1, t2 = e2 %}body{% endwith %}`. -/
