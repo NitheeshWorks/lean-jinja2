@@ -4,4 +4,5 @@ import LeanJinja2.Proofs.AstWalk
 import LeanJinja2.Proofs.Render
 import LeanJinja2.Proofs.Filters
 import LeanJinja2.Proofs.Semantics
+import LeanJinja2.Proofs.Parser.Body
 import LeanJinja2.Proofs.Verified

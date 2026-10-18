@@ -870,7 +870,7 @@ def pPrintItems : Nat → Bool → List TokKind → PR (List Expr)
 end
 
 /-- The fuel `parseTokens` gives the parser: generous in the token count. -/
-def fuelFor (ts : List TokKind) : Nat := 16 * (ts.length + 2)
+def fuelFor (ts : List TokKind) : Nat := 40 * (ts.length + 2)
 
 end Parse
 

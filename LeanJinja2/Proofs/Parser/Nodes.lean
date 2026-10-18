@@ -252,7 +252,7 @@ def FilterCall.sz (f : FilterCall) : Nat := Expr.szs f.args + Expr.szKw f.kwargs
 
 def szChain : List FilterCall → Nat
   | [] => 0
-  | f :: fs => f.sz + szChain fs + 1
+  | f :: fs => f.sz + szChain fs
 
 theorem args_items_ok {args : List Expr} (hwa : Expr.WFs args) :
     ∀ x ∈ args, x.WF ∧ ExprOK x (30 * x.sz + 12) := by
@@ -311,8 +311,8 @@ theorem chainPipe_ok : ∀ (fs : List FilterCall) (rest : List TokKind), (∀ f 
     obtain ⟨n, rfl⟩ : ∃ j, n = j + 1 := ⟨n - 1, by omega⟩
     have hf := filterOne_ok f (hw f List.mem_cons_self)
       ((fs.flatMap fun f => [Pretty.op .pipe] ++ Pretty.filterCall f) ++ .blockEnd :: rest)
-      (by cases fs <;> simp [FilterFollow]) n (by simp [szChain] at hn; omega)
-    have ih := chainPipe_ok fs rest (fun g hg => hw g (List.mem_cons_of_mem _ hg)) n (by simp [szChain] at hn; omega)
+      (by cases fs <;> simp [FilterFollow]) n (by simp [szChain, FilterCall.sz] at hn ⊢; omega)
+    have ih := chainPipe_ok fs rest (fun g hg => hw g (List.mem_cons_of_mem _ hg)) n (by simp [szChain, FilterCall.sz] at hn ⊢; omega)
     simp only [List.flatMap_cons, List.append_assoc, List.singleton_append, List.cons_append, List.nil_append] at hf ih ⊢
     rw [pFilterChain]
     simp [bind, Except.bind, hf, ih]
@@ -334,7 +334,7 @@ theorem chainFirst_ok (fs : List FilterCall) (rest : List TokKind) (hne : fs ≠
   match fs, hne with
   | [f], _ =>
     have hf := filterOne_ok f (hw f List.mem_cons_self) (.blockEnd :: rest) (by simp [FilterFollow]) n
-      (by simp [szChain] at hn; omega)
+      (by simp [szChain, FilterCall.sz] at hn ⊢; omega)
     have hc := chainPipe_ok [] rest (by simp) n (by simp [szChain, FilterCall.sz] at hn ⊢; omega)
     simp only [Pretty.filterChain]
     rw [pFilterChain]
@@ -342,10 +342,10 @@ theorem chainFirst_ok (fs : List FilterCall) (rest : List TokKind) (hne : fs ≠
     simp [bind, Except.bind, hf, hc]
   | f :: g :: gs, _ =>
     have hc := chainPipe_ok (g :: gs) rest (fun h hh => hw h (List.mem_cons_of_mem _ hh)) n
-      (by simp [szChain] at hn ⊢; omega)
+      (by simp [szChain, FilterCall.sz] at hn ⊢; omega)
     rw [← pipe_filterChain (g :: gs) (by simp)] at hc
     have hf := filterOne_ok f (hw f List.mem_cons_self) (.op .pipe :: (Pretty.filterChain (g :: gs) ++ .blockEnd :: rest))
-      (by simp [FilterFollow]) n (by simp [szChain] at hn; omega)
+      (by simp [FilterFollow]) n (by simp [szChain, FilterCall.sz] at hn ⊢; omega)
     have hex : Pretty.filterChain (f :: g :: gs) = Pretty.filterCall f ++ .op .pipe :: Pretty.filterChain (g :: gs) := by
       simp [Pretty.filterChain]
     rw [hex]
@@ -437,5 +437,81 @@ theorem assigns_ok (as : List (Target × Expr)) (rest : List TokKind) (hw : Node
     obtain ⟨n, rfl⟩ : ∃ j, n = j + 1 := ⟨n - 1, by simp [szAssigns] at hn; omega⟩
     have ih := assignsTail_ok as rest has n (by simp [szAssigns] at hn; omega)
     simpa using assign_step (first := true) ht he (n + 1) (by simp [szAssigns, Target.sz] at hn ⊢; omega) ih
+
+end LeanJinja2
+
+namespace LeanJinja2
+
+open Parse
+
+/-! ## Single expressions where a tuple may stand -/
+
+theorem isOp_false {o : Op} {r : List TokKind} (h : ∀ x, r.head? = some x → x ≠ .op o) : isOp o r.head? = false := by
+  cases hr : r.head? with
+  | none => rfl
+  | some x =>
+    have := h x hr
+    cases x with
+    | op p => simp only [isOp, beq_eq_false_iff_ne]; intro hp; exact this (by rw [hp])
+    | _ => rfl
+
+theorem isName_false {s : String} {r : List TokKind} (h : ∀ x, r.head? = some x → x ≠ .name s) :
+    isName s r.head? = false := by
+  cases hr : r.head? with
+  | none => rfl
+  | some x =>
+    have := h x hr
+    cases x with
+    | name p => simp only [isName, beq_eq_false_iff_ne]; intro hp; exact this (by rw [hp])
+    | _ => rfl
+
+theorem tuple_one {e : Expr} (hw : e.WF) {extra : List String} (hx : ∀ s ∈ extra, s = "recursive")
+    (wc : Bool) {r : List TokKind} (hr : Stop (if wc then 10 else 9) r) (hc : ∀ x, r.head? = some x → x ≠ .op .comma)
+    (n : Nat) (hn : 30 * e.sz + 13 ≤ n) : pTuple (n + 1) wc extra false (Pretty.expr e ++ r) = .ok (e, r) := by
+  obtain ⟨k, hk⟩ : ∃ k, 30 * e.sz = k + 1 := ⟨30 * e.sz - 1, by have := e.sz_pos; omega⟩
+  have hp := prim_ok e hw
+  rw [hk] at hp
+  obtain ⟨t, hst, hh⟩ := expr_head' hw
+  have hend : isTupleEnd extra (some t) = false := by
+    cases t with
+    | name s =>
+      simp only [isTupleEnd]
+      cases hcs : extra.contains s with
+      | false => rfl
+      | true =>
+        have := hx s (by simpa using hcs)
+        subst this
+        simp [StartTok, reservedNames] at hst
+    | op o => cases o <;> simp_all [StartTok, isTupleEnd]
+    | _ => simp_all [StartTok, isTupleEnd]
+  have hexpr : pExpr n wc (Pretty.expr e ++ r) = .ok (e, r) := by
+    cases wc with
+    | true => exact (hp.exprOK hw) r (by simpa using hr) n (by omega)
+    | false => exact PrimOK.exprNoCond hp hw (by simpa using hr) n (by omega)
+  simp [pTuple, hh, hend, bind, Except.bind, hexpr, isOp_false hc]
+
+/-! ## End tags -/
+
+/-- How a body ends: at the end of input, or at one of the end tags `ends`
+(the subparser then stops at the tag's name). -/
+def EndsAt (ends : List String) (R R' : List TokKind) : Prop :=
+  (R = [] ∧ R' = []) ∨ ∃ e R2, e ∈ ends ∧ R = .blockBegin :: .name e :: R2 ∧ R' = .name e :: R2
+
+/-- End tags are not statement keywords. -/
+def EndsOK (ends : List String) : Prop := ∀ s ∈ ends, s ∉ statementKeywords
+
+theorem EndsOK.contains_false {ends : List String} (h : EndsOK ends) {k : String} (hk : k ∈ statementKeywords) :
+    ends.contains k = false := by
+  cases hc : ends.contains k with
+  | false => rfl
+  | true => exact absurd hk (h k (by simpa using hc))
+
+theorem statements_ok {stack : TagStack} {tag e : String} {ends : List String} {drop : Bool}
+    {body : List Node} {R2 : List TokKind} {n : Nat}
+    (hb : subparse n ((tag, ends) :: stack) ends (Pretty.nodes body ++ .blockBegin :: .name e :: R2) =
+      .ok (body, .name e :: R2)) :
+    pStatements (n + 1) stack tag ends drop (.blockEnd :: (Pretty.nodes body ++ .blockBegin :: .name e :: R2)) =
+      .ok (body, if drop then R2 else .name e :: R2) := by
+  simp [pStatements, expect, bind, Except.bind, hb]
 
 end LeanJinja2
