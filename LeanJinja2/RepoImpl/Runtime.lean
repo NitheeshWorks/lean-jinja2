@@ -52,7 +52,7 @@ def charValues (s : String) : List Value := s.toList.map (fun c => .str (String.
 /-- Python `iter(v)` under the undefined policy: the items a `for` loop sees. -/
 def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (List Value)
   | .list xs => .ok xs
-  | .tuple xs => .ok xs
+  | .tuple xs | .namedTuple _ _ xs => .ok xs
   | .dict kvs => .ok (kvs.map Prod.fst)
   | .str s => .ok (charValues s)
   | .markup m => .ok (charValues m.str)
@@ -63,7 +63,7 @@ def iterOf (pol : UndefinedPolicy) (heap : Heap) : Value → Except ValueError (
 /-- Python `len(v)` under the undefined policy. -/
 def lenOf (pol : UndefinedPolicy) : Value → Except ValueError Nat
   | .list xs => .ok xs.length
-  | .tuple xs => .ok xs.length
+  | .tuple xs | .namedTuple _ _ xs => .ok xs.length
   | .dict kvs => .ok kvs.length
   | .str s => .ok s.length
   | .markup m => .ok m.str.length
@@ -158,6 +158,21 @@ def pyAttr (heap : Heap) (v : Value) (a : String) : Option Value :=
   | .str _ | .markup _ => if strMethods.contains a then some (.method v a) else none
   | .list _ => if listMethods.contains a then some (.method v a) else none
   | .tuple _ => if a == "index" || a == "count" then some (.method v a) else none
+  | .namedTuple _ fs xs =>
+    match (fs.zip xs).lookup a with
+    | some x => some x
+    | none => if a == "index" || a == "count" then some (.method (.tuple xs) a) else none
+  | .cycler addr =>
+    let cell := (heap[addr]?).getD []
+    match a with
+    | "items" | "pos" => cell.lookup a
+    | "current" =>
+      match cell.lookup "items", cell.lookup "pos" with
+      | some (.tuple xs), some (.int p) => xs[p.toNat]?
+      | _, _ => none
+    | "next" | "reset" => some (.method v a)
+    | _ => none
+  | .joiner addr => if a == "sep" || a == "used" then ((heap[addr]?).getD []).lookup a else none
   -- the number attributes of Python's `int` (and `bool`) and `float`
   | .int n => intAttr n a
   | .bool b => intAttr (if b then 1 else 0) a
@@ -185,7 +200,7 @@ def pyItem (heap : Heap) (v : Value) (k : Value) : Option Value :=
   | .dict kvs, _ => Value.lookupIn kvs k
   | .list xs, .int i => indexList xs i
   | .list xs, .bool b => indexList xs (if b then 1 else 0)
-  | .tuple xs, .int i => indexList xs i
+  | .tuple xs, .int i | .namedTuple _ _ xs, .int i => indexList xs i
   | .str s, .int i => (strIndex s i).map Value.str
   | .markup m, .int i => (strIndex m.str i).map (fun t => .markup (Markup.markSafe t))
   | .ns addr, .str a => ((heap[addr]?).getD []).lookup a
@@ -282,7 +297,7 @@ def sliceV (pol : UndefinedPolicy) (v : Value) (start stop step : Option Value) 
     pure ((slicePick arr i st count).foldl (·.push ·) "")
   match v with
   | .list xs => return .list (← pick xs)
-  | .tuple xs => return .tuple (← pick xs)
+  | .tuple xs | .namedTuple _ _ xs => return .tuple (← pick xs)
   | .str s => return .str (← pickStr s)
   | .markup m => return .markup (Markup.markSafe (← pickStr m.str))
   | .undef i => if i.policy pol == .chainable then pure v else failUndef i
@@ -303,7 +318,8 @@ def arith (op : BinOp) (a b : Value) : Except ValueError Value :=
     | .markup m, .markup n => .ok (.markup (m ++ n))
     | .str s, .str t => .ok (.str (s ++ t))
     | .list xs, .list ys => .ok (.list (xs ++ ys))
-    | .tuple xs, .tuple ys => .ok (.tuple (xs ++ ys))
+    | .tuple xs, .tuple ys | .namedTuple _ _ xs, .tuple ys | .tuple xs, .namedTuple _ _ ys
+    | .namedTuple _ _ xs, .namedTuple _ _ ys => .ok (.tuple (xs ++ ys))
     | _, _ =>
       match a.num?, b.num? with
       | some x, some y => if a.isFloat || b.isFloat then .ok (mkFloat (decAdd x y))
@@ -319,7 +335,8 @@ def arith (op : BinOp) (a b : Value) : Except ValueError Value :=
     | .str s, .int k | .int k, .str s => .ok (.str (String.join (List.replicate k.toNat s)))
     | .markup m, .int k | .int k, .markup m => .ok (.markup (Markup.times m k.toNat))
     | .list xs, .int k | .int k, .list xs => .ok (.list (List.replicate k.toNat xs).flatten)
-    | .tuple xs, .int k | .int k, .tuple xs => .ok (.tuple (List.replicate k.toNat xs).flatten)
+    | .tuple xs, .int k | .int k, .tuple xs | .namedTuple _ _ xs, .int k | .int k, .namedTuple _ _ xs =>
+      .ok (.tuple (List.replicate k.toNat xs).flatten)
     | _, _ =>
       match a.num?, b.num? with
       | some x, some y => if a.isFloat || b.isFloat then .ok (mkFloat (decMul x y))
@@ -366,7 +383,7 @@ def containsV (pol : UndefinedPolicy) (heap : Heap) (x container : Value) :
     match x.text? with
     | some t => .ok (containsSub s.toList t.toList)
     | none => .error (.typeError s!"'in <string>' requires string as left operand, not {x.typeName}")
-  | .list xs | .tuple xs => .ok (xs.any (fun y => Value.pyEq x y))
+  | .list xs | .tuple xs | .namedTuple _ _ xs => .ok (xs.any (fun y => Value.pyEq x y))
   | .dict kvs => .ok (kvs.any (fun p => Value.pyEq x p.1))
   | .undef i => if i.policy pol == .strict then failUndef i else .ok false
   | .ns addr => .ok ((((heap[addr]?).getD []).map Prod.fst).any (fun k => Value.pyEq x (.str k)))

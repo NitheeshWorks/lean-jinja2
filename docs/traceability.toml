@@ -185,10 +185,51 @@ test = ["tests/Conformance.lean", "tests/Bench.lean"]
 note = "Both theorems hold for every LexConfig, line prefixes included. A prefix must be non-empty (LexConfig.h_lineNonempty); upstream accepts an empty one, which matches at every line."
 
 [[requirement]]
-id = "deviation.globals"
-upstream = "docs/templates.rst#list-of-global-functions"
-title = "cycler, joiner, lipsum, random, urlize"
-status = "excluded"
+id = "globals.cycler-joiner"
+upstream = "tests/test_api.py::TestExtendedAPI::test_cycler"
+title = "cycler(*items) with next(), reset(), current, items, pos; joiner(sep) returning '' then sep"
+status = "tested"
+realises = ["LeanJinja2.callV", "LeanJinja2.pyAttr", "LeanJinja2.builtinGlobals"]
+theorem = ["LeanJinja2.render_total"]
+test = ["tests/Conformance.lean", "tests/Bench.lean"]
+note = "Both are heap cells (Value.cycler, Value.joiner), like namespace(). render_total covers templates that call them (callableGlobals). Upstream's messages for wrong arguments are kept. lake exe bench bounds 10^5 cycler.next() and 10^5 joiner() calls at 500 ms."
+
+[[requirement]]
+id = "deviation.random"
+upstream = "src/jinja2/filters.py::do_random"
+title = "random and lipsum draw from an explicit seeded source"
+status = "deviation"
+realises = ["LeanJinja2.randomChoice", "LeanJinja2.lipsum", "LeanJinja2.lipsumCall", "LeanJinja2.SplitMix.next", "LeanJinja2.applyFilterM", "LeanJinja2.Filters.random"]
+theorem = ["LeanJinja2.SplitMix.below_lt"]
+test = ["tests/Props.lean", "tests/Conformance.lean", "tests/Bench.lean"]
+note = "SplitMix64 seeded by Environment.randomSeed, state in heap cell 0; a render is deterministic, upstream's is not. lipsum follows generate_lorem_ipsum's paragraph, comma and full-stop rules with its own Latin words; lipsumProp checks n paragraphs, the word-count bounds of test_lorem_ipsum_min/max, no word twice in a row and the <p> markup. randomProp checks the pick is an item. Inside map('random') items share one draw state. Benches: lipsum(2000) 300 ms, 10^5 |random 700 ms."
+
+[[requirement]]
+id = "filters.urlize"
+upstream = "tests/test_filters.py::TestFilter::test_urlize"
+title = "urlize: links, mailto and email addresses, rel/target/nofollow, trim_url_limit, extra_schemes and the urlize.* policies"
+status = "tested"
+realises = ["LeanJinja2.Filters.urlize", "LeanJinja2.urlizeText", "LeanJinja2.httpMatch", "LeanJinja2.emailMatch", "LeanJinja2.uriSchemeOk", "LeanJinja2.balance"]
+test = ["tests/Conformance.lean", "tests/Bench.lean"]
+note = "Upstream's regexes are decided directly, one linear pass per word (each is anchored at both ends and the host must end at the first character outside its alphabet). 8021 generated words agreed with jinja2 3.1.6. Keeps UP-059 (an upper-case scheme gets https:// prepended). \\w is isIdentChar and \\d an ASCII digit. Benches: 1 MB of text 500 ms, a 1 MB word 300 ms, 10^5 brackets 200 ms."
+
+[[requirement]]
+id = "filters.groupby-tuple"
+upstream = "src/jinja2/filters.py::_GroupTuple"
+title = "groupby items are named tuples with .grouper and .list that print and compare as tuples"
+status = "tested"
+realises = ["LeanJinja2.Filters.groupby", "LeanJinja2.pyAttr", "LeanJinja2.Value.pyEq"]
+test = ["tests/Conformance.lean"]
+
+[[requirement]]
+id = "render.call-result"
+upstream = "docs/templates.rst#working-with-automatic-escaping"
+title = "Under autoescape, macro call results and imported modules are not escaped twice"
+status = "implemented"
+realises = ["LeanJinja2.wrapText", "LeanJinja2.callMacro"]
+theorem = ["LeanJinja2.call_result_passthrough", "LeanJinja2.autoescape_sound"]
+test = ["tests/Conformance.lean"]
+note = "autoescape_sound has no hypothesis on macros or imports: its invariant is proved over the whole mutual renderer (callMacro, call blocks, include, import, from-import), and AutoescapeAlways covers every template the loader holds. call_result_passthrough states what an interpolated call result or module contributes."
 
 [[requirement]]
 id = "deviation.autoescape-callable"

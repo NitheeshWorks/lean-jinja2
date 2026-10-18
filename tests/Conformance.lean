@@ -1037,8 +1037,117 @@ def valueOpCases : List Case := [
   renders (F ++ "test_slice[string-index]") "{{ 'héllo'[1] }}{{ 'héllo'[-1] }}{{ 'abc'[5] is undefined }}" "éoTrue"
 ]
 
+def API := "tests/test_api.py::TestExtendedAPI::"
+def UT := "tests/test_utils.py::"
+
+def aeLibEnv : Environment := {
+  autoescape := .const true,
+  loader := DictLoader [
+    ("lib", "{% macro b(x) %}<b>{{ x }}</b>{% endmacro %}{% set title = '<T>' %}<hr>{{ title }}")] }
+
+def policyEnv : Environment := {
+  urlizeRel := none, urlizeTarget := some "_top", urlizeExtraSchemes := ["git:"] }
+
+/-- The stateful and random globals (`cycler`, `joiner`, `lipsum`), the
+`random` and `urlize` filters, `groupby`'s named tuple, and autoescaping
+through macro calls and imports. Expected outputs are jinja2 3.1.6's. -/
+def globalCases : List Case := [
+  renders (API ++ "test_cycler")
+    "{% set c = cycler('a', 'b', 'c') %}{% for i in range(5) %}{{ c.next() }}{% endfor %}|{{ c.current }}|{{ c.pos }}|{{ c.items }}"
+    "abcab|c|2|('a', 'b', 'c')",
+  renders (API ++ "test_cycler[reset]")
+    "{% set c = cycler(1, 2) %}{{ c.next() }}{{ c.reset() }}{{ c.current }}{{ c.next() }}{{ c.next() }}{{ c.next() }}"
+    "1None1121",
+  renders (API ++ "test_cycler[loop]")
+    "{% set c = cycler('odd', 'even') %}{% for x in [1,2,3] %}<li class={{ c.next() }}>{% endfor %}"
+    "<li class=odd><li class=even><li class=odd>",
+  fails (API ++ "test_cycler[empty]") "{{ cycler() }}" (msgHas "at least one item has to be provided"),
+  fails (API ++ "test_cycler[keyword]") "{{ cycler(1, a=2) }}" (msgHas "unexpected keyword argument 'a'"),
+  fails (API ++ "test_cycler[next-args]") "{{ cycler(1).next(2) }}" (msgHas "takes 1 positional argument but 2 were given"),
+  fails (API ++ "test_cycler[set-attr]") "{% set c = cycler(1) %}{% set c.pos = 3 %}" isRuntime,
+  renders (API ++ "test_joiner") "{% set j = joiner() %}{% for x in [1,2,3] %}{{ j() }}{{ x }}{% endfor %}" "1, 2, 3",
+  renders (API ++ "test_joiner[sep]") "{% set j = joiner(' | ') %}{% for x in 'abc' %}{{ j() }}{{ x }}{% endfor %}"
+    "a | b | c",
+  renders (API ++ "test_joiner[attrs]") "{% set j = joiner(sep='-') %}{{ j() }}{{ j() }}{{ j() }}|{{ j.sep }}|{{ j.used }}"
+    "--|-|True",
+  fails (API ++ "test_joiner[args]") "{{ joiner(1, 2) }}" (msgHas "takes from 1 to 2 positional arguments but 3 were given"),
+  renders (API ++ "test_globals[defined]") "{{ cycler is defined }}{{ joiner is defined }}{{ lipsum is defined }}|{{ joiner() is callable }}{{ cycler(1) is callable }}"
+    "TrueTrueTrue|TrueFalse",
+  renders (UT ++ "TestLoremIpsum::test_lorem_ipsum_n")
+    "{{ lipsum(0) }}|{{ lipsum(n=3, html=false).count('\\n') }}|{{ lipsum(2).startswith('<p>') }}|{{ lipsum(1, false, 5, 6)|wordcount }}|{{ lipsum(2).count('<p>') }}"
+    "|4|True|5|2",
+  renders (UT ++ "TestLoremIpsum::test_lorem_ipsum_markup")
+    "{{ lipsum(1, true, 3, 4).startswith('<p>') }}" "True" (env := { autoescape := .const true }),
+  fails (UT ++ "TestLoremIpsum::test_lorem_ipsum_min[empty-range]") "{{ lipsum(1, min=5, max=5) }}"
+    (msgHas "empty range in randrange(5, 5)"),
+  fails (UT ++ "TestLoremIpsum::test_lorem_ipsum_n[type]") "{{ lipsum('a') }}"
+    (msgHas "'str' object cannot be interpreted as an integer"),
+  fails (UT ++ "TestLoremIpsum::test_lorem_ipsum_n[keyword]") "{{ lipsum(x=1) }}"
+    (msgHas "unexpected keyword argument 'x'"),
+  renders (F ++ "test_random[one-and-empty]") "{{ [5]|random }}|{{ []|random is undefined }}|{{ 'x'|random }}"
+    "5|True|x",
+  renders (F ++ "test_groupby[grouper-list]")
+    "{% for g in [{'a': 1, 'b': 2}, {'a': 1, 'b': 3}, {'a': 2, 'b': 4}]|groupby('a') %}{{ g.grouper }}={{ g.list|map(attribute='b')|join(',') }};{% endfor %}"
+    "1=2,3;2=4;",
+  renders (F ++ "test_groupby[tuple]")
+    "{% for g in [1, 2, 1]|groupby('real') %}{{ g }}{{ g[0] }}{{ g|length }}{{ g.count(1) }}{% endfor %}|{{ ([1]|groupby('real'))[0] == (1, [1]) }}"
+    "(1, [1, 1])121(2, [2])220|True",
+  renders (F ++ "test_urlize")
+    "{{ \"foo example.org bar\"|urlize }}|{{ \"foo http://www.example.com/ bar\"|urlize }}|{{ \"foo mailto:email@example.com bar\"|urlize }}|{{ \"foo email@example.com bar\"|urlize }}"
+    ("foo <a href=\"https://example.org\" rel=\"noopener\">example.org</a> bar|" ++
+     "foo <a href=\"http://www.example.com/\" rel=\"noopener\">http://www.example.com/</a> bar|" ++
+     "foo <a href=\"mailto:email@example.com\">email@example.com</a> bar|" ++
+     "foo <a href=\"mailto:email@example.com\">email@example.com</a> bar"),
+  renders (F ++ "test_urlize_rel_policy") "{{ \"foo http://www.example.com/ bar\"|urlize }}"
+    "foo <a href=\"http://www.example.com/\">http://www.example.com/</a> bar"
+    (env := { urlizeRel := none }),
+  renders (F ++ "test_urlize_target_parameter") "{{ \"foo http://www.example.com/ bar\"|urlize(target=\"_blank\") }}"
+    "foo <a href=\"http://www.example.com/\" rel=\"noopener\" target=\"_blank\">http://www.example.com/</a> bar",
+  renders (F ++ "test_urlize_extra_schemes_parameter")
+    "{{ \"foo tel:+1-514-555-1234 ftp://localhost bar\"|urlize(extra_schemes=[\"tel:\", \"ftp:\"]) }}"
+    ("foo <a href=\"tel:+1-514-555-1234\" rel=\"noopener\">tel:+1-514-555-1234</a> " ++
+     "<a href=\"ftp://localhost\" rel=\"noopener\">ftp://localhost</a> bar"),
+  renders (UT ++ "TestEscapeUrlizeTarget::test_escape_urlize_target")
+    "{{ 'http://example.org'|urlize(target='<script>') }}"
+    "<a href=\"http://example.org\" rel=\"noopener\" target=\"&lt;script&gt;\">http://example.org</a>",
+  renders (UT ++ "TestEscapeUrlizeTarget::test_urlize_mail_mastodon") "{{ x|urlize }}"
+    "<a href=\"mailto:nabijaczleweli@nabijaczleweli.xyz\">nabijaczleweli@nabijaczleweli.xyz</a>\n@eater@cijber.social\n"
+    [("x", .str "nabijaczleweli@nabijaczleweli.xyz\n@eater@cijber.social\n")],
+  renders (F ++ "test_urlize[policies]") "{{ 'http://x.org git:repo'|urlize }}|{{ 'x.org'|urlize(rel='a') }}"
+    "<a href=\"http://x.org\" target=\"_top\">http://x.org</a> <a href=\"git:repo\" target=\"_top\">git:repo</a>|x.org"
+    (env := policyEnv),
+  renders (F ++ "test_urlize[trim-nofollow]") "{{ 'http://ex.org/very/long/path'|urlize(10, true, target='_blank') }}"
+    "<a href=\"http://ex.org/very/long/path\" rel=\"nofollow noopener\" target=\"_blank\">http://ex....</a>",
+  renders (F ++ "test_urlize[brackets-escaped]")
+    "{{ 'a <b@c.com> http://x.org/?a=1&b=2 ((http://x.org)))'|urlize }}"
+    ("a &lt;<a href=\"mailto:b@c.com\">b@c.com</a>&gt; <a href=\"http://x.org/?a=1&amp;b=2\" rel=\"noopener\">" ++
+     "http://x.org/?a=1&amp;b=2</a> ((<a href=\"http://x.org\" rel=\"noopener\">http://x.org</a>)))")
+    (env := { autoescape := .const true }),
+  renders (F ++ "test_urlize[upper-case scheme]") "{{ 'HTTP://EXAMPLE.COM'|urlize }}"
+    "<a href=\"https://HTTP://EXAMPLE.COM\" rel=\"noopener\">HTTP://EXAMPLE.COM</a>",
+  renders (F ++ "test_urlize[ip]") "{{ 'http://[::1]:80/x https://127.0.0.1:8080 https://300.1.1.1 @a@b'|urlize }}"
+    ("<a href=\"http://[::1]:80/x\" rel=\"noopener\">http://[::1]:80/x</a> " ++
+     "<a href=\"https://127.0.0.1:8080\" rel=\"noopener\">https://127.0.0.1:8080</a> " ++
+     "<a href=\"https://300.1.1.1\" rel=\"noopener\">https://300.1.1.1</a> @a@b"),
+  fails (F ++ "test_urlize[bad-scheme]") "{{ 'x'|urlize(extra_schemes=['bad']) }}"
+    (msgHas "'bad' is not a valid URI scheme prefix."),
+  renders (MA ++ "test_macro_autoescape")
+    "{% macro m(x) %}<i>{{ x }}</i>{% endmacro %}{{ m('<a&b>') }}|{{ m(m('<')) }}"
+    "<i>&lt;a&amp;b&gt;</i>|<i><i>&lt;</i></i>" (env := { autoescape := .const true }),
+  renders (MA ++ "test_caller_autoescape")
+    "{% macro m() %}[{{ caller() }}]{% endmacro %}{% call m() %}<{{ '<' }}>{% endcall %}"
+    "[<&lt;>]" (env := { autoescape := .const true }),
+  renders (IM ++ "test_import_autoescape") "{% import 'lib' as l %}{{ l.b('<x>') }}|{{ l }}|{{ l.title }}"
+    "<b>&lt;x&gt;</b>|<hr>&lt;T&gt;|&lt;T&gt;" (env := aeLibEnv),
+  renders (IM ++ "test_from_import_autoescape") "{% from 'lib' import b %}{{ b('&') }}{{ b(b('\"')) }}"
+    "<b>&amp;</b><b><b>&#34;</b></b>" (env := aeLibEnv),
+  renders (API ++ "test_cycler_joiner_autoescape")
+    "{% set c = cycler('<a>', '&') %}{{ c.next() }}{{ c.next() }}|{% set j = joiner('<br>') %}{% for x in [1,2] %}{{ j() }}{{ x }}{% endfor %}"
+    "&lt;a&gt;&amp;|1&lt;br&gt;2" (env := { autoescape := .const true })
+]
+
 def cases : List Case := filterCases ++ testCases ++ coreCases ++ lexCases ++ inheritanceCases ++ undefinedCases ++
-  loaderCases ++ importCases ++ macroCases ++ lineCases ++ valueOpCases
+  loaderCases ++ importCases ++ macroCases ++ lineCases ++ valueOpCases ++ globalCases
 
 def main : IO UInt32 := do
   let mut failures := 0

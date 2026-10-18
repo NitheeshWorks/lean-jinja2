@@ -22,7 +22,7 @@ namespace LeanJinja2
 
 /-- The globals a non-recursive template may call: builtins that compute a
 value and never re-enter template code. -/
-def callableGlobals : List String := ["range", "dict", "namespace"]
+def callableGlobals : List String := ["range", "dict", "lipsum", "cycler", "joiner", "namespace"]
 
 /-- Values whose call re-enters template code: macros, block references
 (`super()`, `self.b`) and the loop object of a recursive loop. -/

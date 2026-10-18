@@ -55,7 +55,7 @@ def Environment.fromString (env : Environment) (source : String)
 /-- The trace a render produces, before flattening (see `Piece`). -/
 def Template.renderTrace (t : Template) (vars : List (String × Value) := []) :
     Except TemplateError (List Piece) :=
-  match (renderTemplate t.env t.env.maxDepth { ctx := t.env.startContext vars } t.name t.body).run [] with
+  match (renderTemplate t.env t.env.maxDepth { ctx := t.env.startContext vars } t.name t.body).run (initHeap t.env.randomSeed) with
   | .ok ((ps, _), _) => .ok ps
   | .error e => .error e
 

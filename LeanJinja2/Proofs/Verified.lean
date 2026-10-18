@@ -49,6 +49,8 @@ structure VerifiedRender where
   autoescapeEscaped : Spec.autoescapeEscaped
   /-- `markup_passthrough`. -/
   markupPassthrough : Spec.markupPassthrough
+  /-- `call_result_passthrough`. -/
+  callResultPassthrough : Spec.callResultPassthrough
   /-- `render_total`. -/
   renderTotal : Spec.renderTotal
 
@@ -57,6 +59,7 @@ theorem theVerifiedRender : VerifiedRender where
   autoescapeSound := autoescape_sound
   autoescapeEscaped := autoescape_escaped
   markupPassthrough := markup_passthrough
+  callResultPassthrough := call_result_passthrough
   renderTotal := render_total
 
 /-- Loop variables, undefined values, inheritance and filters. -/

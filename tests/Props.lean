@@ -235,8 +235,45 @@ def centerProp : Property where
       then (none, r) else (some s!"{repr s} width {w} -> {repr t}", r)
     | _ => (some s!"failed on {repr s}", r)
 
+/-- Occurrences of a character. -/
+def countChar (c : Char) (s : String) : Nat := s.toList.count c
+
+def lipsumProp : Property where
+  name := "lipsum: n paragraphs of randrange(min, max) words, no word twice in a row (test_utils.py::TestLoremIpsum)"
+  check r :=
+    let (seed, r) := r.nat 1000000
+    let (n, r) := r.nat 6
+    let (lo, r) := r.nat 40
+    let (w, r) := r.nat 60
+    let lo : Int := lo + 1
+    let hi : Int := lo + w + 1
+    match lipsum n false lo hi (UInt64.ofNat seed), lipsum n true lo hi (UInt64.ofNat seed) with
+    | .ok (.str t, _), .ok (.markup m, _) =>
+      let paras := if n = 0 then [] else t.splitOn "\n\n"
+      let words := fun (p : String) => (p.splitOn " ").map (fun x =>
+        String.ofList ((x.toList.filter (fun c => c != ',' && c != '.')).map Char.toLower))
+      let noRepeat := fun (ws : List String) => (ws.zip (ws.drop 1)).all (fun (a, b) => a != b)
+      let ok := (if n = 0 then t == "" else countChar '\n' t == 2 * (n - 1)) &&
+        paras.length == n &&
+        paras.all (fun p => countChar ' ' p ≥ (lo - 1).toNat && (countChar ' ' p : Int) < hi - 1 &&
+          p.endsWith "." && noRepeat (words p)) &&
+        m.str == "\n".intercalate (paras.map (fun p => "<p>" ++ p ++ "</p>"))
+      if ok then (none, r) else (some s!"lipsum({n}, min={lo}, max={hi}) seed {seed}: {repr t}", r)
+    | _, _ => (some s!"lipsum({n}, min={lo}, max={hi}) failed", r)
+
+def randomProp : Property where
+  name := "random picks an item of the sequence; an empty one gives undefined"
+  check r :=
+    let (seed, r) := r.nat 1000000
+    let (xs, r) := genInts r
+    let vs := xs.map Value.int
+    match randomChoice .default [] (UInt64.ofNat seed) (.list vs) with
+    | .ok (.int i, _) => if xs.contains i then (none, r) else (some s!"{xs} gave {i}", r)
+    | .ok (.undef _, _) => if xs.isEmpty then (none, r) else (some s!"{xs} gave undefined", r)
+    | _ => (some s!"{xs} failed", r)
+
 def properties : List Property := [renderTotal, printParse, sortProp, uniqueProp, sliceProp, trimProp, wordcountProp,
-  centerProp]
+  centerProp, lipsumProp, randomProp]
 
 def main (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 88172645463325252

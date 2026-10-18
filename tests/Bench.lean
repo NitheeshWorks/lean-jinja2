@@ -166,8 +166,31 @@ def valueOps : List Bench := [
     run := fun u => render "{% for i in range(10000) %}{{ s[i] }}{% endfor %}" [("s", .str (rep 1000 "abcdefghij"))] u,
     ok := rendersLen 10000, boundMs := 1000 } ]
 
+/-- The globals and filters of `5zga4vtt22ic`: linear in the input. -/
+def globalOps : List Bench := [
+  { name := "urlize of 1 MB of text with links",
+    run := fun u => render "{{ s|urlize|length }}" [("s", .str (rep 20000 "see http://example.org/a?b=1 mail me@x.org, "))] u,
+    ok := fun r => match r with | .ok _ => true | _ => false, boundMs := 500 },
+  { name := "urlize of a 1 MB word",
+    run := fun u => render "{{ s|urlize|length }}" [("s", .str (rep 100000 "www.ab.cd/"))] u,
+    ok := fun r => match r with | .ok _ => true | _ => false, boundMs := 300 },
+  { name := "urlize of 10^5 brackets around a link",
+    run := fun u => render "{{ s|urlize|length }}" [("s", .str (rep 100000 "(" ++ "http://x.org" ++ rep 100000 ")"))] u,
+    ok := fun r => match r with | .ok _ => true | _ => false, boundMs := 200 },
+  { name := "lipsum(2000)", run := render "{{ lipsum(2000)|length > 0 }}", ok := rendersText "True",
+    boundMs := 300 },
+  { name := "10^5 cycler.next()",
+    run := render "{% set c = cycler(1, 2, 3) %}{% for i in range(100000) %}{{ c.next() }}{% endfor %}",
+    ok := rendersLen 100000, boundMs := 500 },
+  { name := "10^5 joiner()",
+    run := render "{% set j = joiner('') %}{% for i in range(100000) %}{{ j() }}.{% endfor %}",
+    ok := rendersLen 100000, boundMs := 500 },
+  { name := "10^5 |random", run := fun u =>
+      render "{% for i in range(100000) %}{{ x|random }}{% endfor %}" [("x", intsV 10)] u,
+    ok := rendersLen 100000, boundMs := 700 } ]
+
 def benches : List Bench :=
-  big ++ valueOps ++ sized 10000 2000 ++ sized 100000 20000 ++ [
+  big ++ valueOps ++ globalOps ++ sized 10000 2000 ++ sized 100000 20000 ++ [
   { name := "range(100000000)", run := render "{{ range(100000000)|length }}", ok := isOverflow,
     boundMs := 100 },
   { name := "range(100000) loop", run := render "{% for i in range(100000) %}.{% endfor %}",

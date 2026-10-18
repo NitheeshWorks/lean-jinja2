@@ -81,6 +81,15 @@ inductive Value where
   /-- An imported template (upstream `TemplateModule`): its name, the names it
   exports (top-level macros and `set`s) and its rendered output. -/
   | module (name : String) (exports : List (String × Value)) (output : String)
+  /-- A named tuple of class `cls` (upstream `groupby`'s `_GroupTuple`): a
+  tuple whose items are also attributes named by `fields`. -/
+  | namedTuple (cls : String) (fields : List String) (items : List Value)
+  /-- A `cycler(...)` object (upstream `Cycler`), by heap address: the cell
+  holds `items` and `pos`. -/
+  | cycler (addr : Nat)
+  /-- A `joiner(sep)` object (upstream `Joiner`), by heap address: the cell
+  holds `sep` and `used`. -/
+  | joiner (addr : Nat)
   deriving Inhabited
 
 /-- A function the host provides (a global, a custom filter or test): it

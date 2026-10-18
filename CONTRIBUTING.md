@@ -129,8 +129,23 @@ Each one has a `docs/traceability.toml` row (`deviation` or `excluded`).
 * **Numbers.** Float literals are exact decimals (rationals), not binary
   doubles. Arithmetic on them is exact, so a printed result can differ from
   Python's in the last digits.
-* **Not implemented:** the globals `cycler`,
-  `joiner` and `lipsum`, and the `random` and `urlize` filters.
+* **Randomness.** `random` and `lipsum` draw from SplitMix64 seeded by
+  `Environment.randomSeed` (default 0), its state in heap cell 0
+  (`RepoImpl/Random.lean`), not from Python's process-wide Mersenne Twister.
+  A render is a function of its inputs and the seed, and each render starts
+  from the seed, so the same template renders the same text twice; upstream
+  differs per call and, seeded, picks other items. `lipsum` uses a Latin
+  vocabulary of our own and draws a different word instead of retrying a
+  repeat. Inside `map('random')` every item draws from the same state (the
+  filter table is pure); a direct `|random` advances it.
+* **Object printing.** A cycler prints as `<jinja2.utils.Cycler object>`,
+  without the address upstream's `repr` shows.
+* **`urlize`** decides upstream's regular expressions directly
+  (`RepoImpl/Urlize.lean`), with `\w` as `isIdentChar` and `\d` as an ASCII
+  digit; checked against jinja2 3.1.6 on 8021 generated words. It keeps
+  UP-059: a URL whose scheme is not lower case gets `https://` prepended.
+  A `trim_url_limit` that is not an integer fails even when no link is made
+  (upstream fails only when it trims).
 * **Line prefixes** must be non-empty (`LexConfig.h_lineNonempty`), as the
   delimiters must; upstream accepts an empty prefix, which matches at every
   line.

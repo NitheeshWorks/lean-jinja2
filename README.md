@@ -40,9 +40,11 @@ def hello : Except TemplateError String := do
 `Environment.fromString` compiles a template from a string. The template
 language is upstream's: `{{ }}`, `{% %}`, `{# #}`, filters and tests,
 `for`/`if`/`set`/`with`/`macro`/`call`/`filter`/`autoescape`/`raw`,
-`extends`/`block`/`include`, the whitespace controls `-` and `+`, and the
-`Undefined`, `StrictUndefined`, `ChainableUndefined` and `DebugUndefined`
-policies. The differences are listed in
+`extends`/`block`/`include`/`import`, the whitespace controls `-` and `+`,
+the globals `range`, `dict`, `namespace`, `cycler`, `joiner` and `lipsum`,
+upstream's builtin filters and tests (`random` and `lipsum` draw from a
+generator seeded by `Environment.randomSeed`), and the `Undefined`,
+`StrictUndefined`, `ChainableUndefined` and `DebugUndefined` policies. The differences are listed in
 [CONTRIBUTING.md](CONTRIBUTING.md#deviations-from-upstream).
 
 ## What is proved
@@ -60,6 +62,7 @@ All of these are machine-checked. `Proofs/Verified.lean` bundles them into
 | `render_literals` | every literal piece of the output is text from the template or one its loader holds |
 | `render_total` | a template without `include`, `extends`, `macro` or `call`, calling only `range`/`dict`/`namespace`, never raises `RecursionError` when `3 * nodesDepth body + 2 ≤ maxDepth`, which `compile` checks (`render_total_fromString`) |
 | `markup_passthrough` | an interpolated `Markup` value contributes its own text, with or without autoescaping |
+| `call_result_passthrough` | under autoescaping, a macro call's (or `caller()`'s) result and an imported module are interpolated as their own text, not escaped twice |
 | `for_loop_vars` | in iteration `i`, `loop.index = i + 1`, `loop.first ↔ i = 0`, `loop.last ↔ i + 1 = length` (and `index0`, `revindex`, `depth`, `previtem`, `nextitem`) |
 | `undefined_policy` | how an undefined name prints under each of the four policies |
 | `extends_block_override` | a block renders the most-derived body in its `extends` chain, with that template's autoescape setting |

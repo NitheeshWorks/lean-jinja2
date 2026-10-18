@@ -123,7 +123,9 @@ def Const.toValue : Const → Value
 /-- What filters and tests read, for a frame. -/
 def Environment.fctx (env : Environment) (fr : Frame) (heap : Heap) : FCtx :=
   { autoescape := fr.autoescape, pol := env.undefined, heap, leeway := env.truncateLeeway,
-    filters := env.filters, tests := env.tests, vars := fr.locals ++ fr.ctx }
+    filters := env.filters, tests := env.tests, vars := fr.locals ++ fr.ctx,
+    rng := rngOf env.randomSeed heap, urlizeRel := env.urlizeRel,
+    urlizeTarget := env.urlizeTarget, urlizeExtraSchemes := env.urlizeExtraSchemes }
 
 /-- The bindings an assignment target makes (tuple unpacking as Python). -/
 def bindTarget (pol : UndefinedPolicy) (heap : Heap) (t : Target) (v : Value) :
@@ -146,6 +148,19 @@ decreasing_by simp_wf; have := List.sizeOf_lt_of_mem ‹_›; omega
 /-- Update one attribute of a namespace object. -/
 def heapSet (heap : Heap) (addr : Nat) (k : String) (v : Value) : Heap :=
   heap.set addr ((k, v) :: ((heap[addr]?).getD []).filter (·.1 != k))
+
+/-- Store the random source's state (heap cell `0`). -/
+def setRng (heap : Heap) (s : UInt64) : Heap := heapSet heap 0 "state" (.int s.toNat)
+
+/-- Apply a filter; `random` advances the render's random source. -/
+def applyFilterM (env : Environment) (fr : Frame) (name : String) (v : Value) (args : List Value)
+    (kwargs : List (String × Value)) : RenderM Value := do
+  let h ← get
+  if name == "random" && args.isEmpty && kwargs.isEmpty then do
+    let (r, s) ← liftR (randomChoice env.undefined h (rngOf env.randomSeed h) v)
+    set (setRng h s)
+    pure r
+  else liftR (applyFilter (env.fctx fr h) name v args kwargs)
 
 /-- Wrap rendered text as the value a macro call, block call or filter block
 returns: markup under autoescape (upstream `Markup(rv)`), text otherwise. -/
@@ -308,7 +323,7 @@ def mappingEntries (pol : UndefinedPolicy) (heap : Heap) : Value → Except Valu
   | v => do
     let xs ← iterOf pol heap v
     xs.mapM fun x => match x with
-      | .tuple [k, y] | .list [k, y] => .ok (k, y)
+      | .tuple [k, y] | .list [k, y] | .namedTuple _ _ [k, y] => .ok (k, y)
       | _ => .error (.typeError "dictionary update sequence element has wrong length")
 
 /-- One comparison of a chain. -/
@@ -393,7 +408,7 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       let kv ← kw.mapM (fun p => do let v ← evalE env n fr p.2; pure (p.1, v))
       let h ← get
       let (av, kv) ← liftR (spreadArgs pol h av kv)
-      liftR (applyFilter (env.fctx fr h) nm v av kv)
+      applyFilterM env fr nm v av kv
     | .test x nm args kw => do
       let v ← evalE env n fr x
       let av ← args.mapM (evalE env n fr)
@@ -483,6 +498,31 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
         | .str k => some (k, p.2) | _ => none)) ++ kw
       set (h ++ [attrs.reverse])
       pure (.ns h.length)
+    | .native "cycler" =>
+      match kw, args with
+      | (k, _) :: _, _ => throw (.typeError s!"Cycler.__init__() got an unexpected keyword argument '{k}'")
+      | [], [] => throw (.typeError "at least one item has to be provided")
+      | [], _ => do
+        let h ← get
+        set (h ++ [[("items", .tuple args), ("pos", .int 0)]])
+        pure (.cycler h.length)
+    | .native "joiner" => do
+      let sep ← match args, kw with
+        | [], [] => pure (.str ", ")
+        | [s], [] | [], [("sep", s)] => pure s
+        | _, (k, _) :: _ =>
+          if k == "sep" then throw (.typeError "Joiner.__init__() got multiple values for argument 'sep'")
+          else throw (.typeError s!"Joiner.__init__() got an unexpected keyword argument '{k}'")
+        | _, [] => throw (.typeError
+            s!"Joiner.__init__() takes from 1 to 2 positional arguments but {args.length + 1} were given")
+      let h ← get
+      set (h ++ [[("sep", sep), ("used", .bool false)]])
+      pure (.joiner h.length)
+    | .native "lipsum" => do
+      let h ← get
+      let (v, s) ← liftR (lipsumCall pol (rngOf env.randomSeed h) args kw)
+      set (setRng h s)
+      pure v
     | .native nm =>
       match env.functions.lookup nm with
       | some g => liftR (liftNative (g (fr.locals ++ fr.ctx) args kw))
@@ -495,6 +535,25 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
       | some l => if Value.pyEq l cur then pure (.bool false) else do
           set (heapSet h cell "last" cur); pure (.bool true)
       | none => do set (heapSet h cell "last" cur); pure (.bool true)
+    | .method (.cycler a) m => do
+      if !(args.isEmpty && kw.isEmpty) then
+        throw (.typeError s!"Cycler.{m}() takes 1 positional argument but {args.length + 1} were given")
+      let h ← get
+      let cell := (h[a]?).getD []
+      match m, cell.lookup "items", cell.lookup "pos" with
+      | "next", some (.tuple xs), some (.int p) => do
+        set (heapSet h a "pos" (.int ((p + 1) % xs.length)))
+        pure (xs[p.toNat]?.getD .none)
+      | "reset", _, _ => do set (heapSet h a "pos" (.int 0)); pure .none
+      | _, _, _ => throw (.typeError s!"'Cycler' object has no attribute '{m}'")
+    | .joiner a => do
+      if !(args.isEmpty && kw.isEmpty) then
+        throw (.typeError s!"Joiner.__call__() takes 1 positional argument but {args.length + 1} were given")
+      let h ← get
+      let cell := (h[a]?).getD []
+      match cell.lookup "used" with
+      | some (.bool true) => pure ((cell.lookup "sep").getD (.str ""))
+      | _ => do set (heapSet h a "used" (.bool true)); pure (.str "")
     | .method recv nm => do
       let h ← get
       liftR (callMethod (env.fctx fr h) recv nm args kw)
@@ -694,7 +753,7 @@ def applyChain (env : Environment) : Nat → Frame → List FilterCall → Value
       let kv ← f.kwargs.mapM (fun p => do let v ← evalE env n fr p.2; pure (p.1, v))
       let h ← get
       let (av, kv) ← liftR (spreadArgs env.undefined h av kv)
-      liftR (applyFilter (env.fctx fr h) f.name acc av kv)) v
+      applyFilterM env fr f.name acc av kv) v
 
 /-- Assign to a target (`{% set %}`, `{% macro %}`): at top level the
 template context, otherwise the locals; `ns.attr` writes the namespace. -/

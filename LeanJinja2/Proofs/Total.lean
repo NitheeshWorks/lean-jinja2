@@ -369,6 +369,12 @@ macro "safe_steps" : tactic => `(tactic| repeat' (first
   | (refine Safe.bindT ?_ fun _ => ?_)
   | split))
 
+/-- A filter application never runs out of fuel. -/
+theorem Safe.applyFilterM' {env : Environment} {fr : Frame} {name : String} {v : Value}
+    {args : List Value} {kw : List (String × Value)} :
+    Safe (applyFilterM env fr name v args kw) (fun _ => True) := by
+  unfold applyFilterM; safe_steps
+
 /-! ## The induction -/
 
 /-- Every renderer function is `Safe` at fuel `n` on what fits in `n`. -/
@@ -524,7 +530,7 @@ theorem Good.chain_step : ∀ fr fs v, FrOK fr → chainNonrec fs = true → cha
   have hm := chain_mem hf
   refine Safe.bindT (ih.evals h (hm.1 hn).1 (by omega)) fun _ => ?_
   refine Safe.bindT (ih.evalKw h (hm.1 hn).2 (by omega)) fun _ => ?_
-  exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun _ => Safe.liftT
+  exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun _ => Safe.applyFilterM'
 
 omit ih in
 /-- Binding a non-recursive target makes plain locals. -/
@@ -707,7 +713,7 @@ theorem startContext_ok {env : Environment} {vars : List (String × Value)}
   · exact hctx g hg v (List.mem_append_left _ hm)
   · exact hctx g hg v (List.mem_append_right _ hm)
   · simp [builtinGlobals] at hm
-    rcases hm with ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ <;> rfl
+    rcases hm with ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ <;> rfl
 
 theorem renderTemplate_safe {env : Environment} {base : Frame} (ho : base.overrides = [])
     (hc : ∀ g ∈ callableGlobals, ∀ v, base.ctx.lookup g = some v → v.reenters = false)
@@ -732,9 +738,9 @@ theorem render_total (t : Template) (vars : List (String × Value)) (hn : nodesN
     (hctx : ∀ g ∈ callableGlobals, ∀ v, (g, v) ∈ vars ++ t.env.globals → v.reenters = false)
     (hb : renderBudget t.body ≤ t.env.maxDepth) : t.render vars ≠ .error .fuelExhausted := by
   have hs := renderTemplate_safe (env := t.env) (base := { ctx := t.env.startContext vars }) rfl
-    (startContext_ok hctx) (name := t.name) hn hb []
+    (startContext_ok hctx) (name := t.name) hn hb (initHeap t.env.randomSeed)
   simp only [Template.render, Template.renderTrace]
-  cases hr : (renderTemplate t.env t.env.maxDepth { ctx := t.env.startContext vars } t.name t.body).run [] with
+  cases hr : (renderTemplate t.env t.env.maxDepth { ctx := t.env.startContext vars } t.name t.body).run (initHeap t.env.randomSeed) with
   | error e =>
     have : e ≠ .fuelExhausted := fun he => hs.1 (he ▸ hr)
     simpa [bind, Except.bind] using this

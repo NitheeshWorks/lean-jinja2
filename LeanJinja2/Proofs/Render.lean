@@ -575,4 +575,12 @@ theorem markup_passthrough (pol : UndefinedPolicy) (m : Markup) (esc : Bool) :
     Piece.text pol (.value (.markup m) esc) = .ok m.str := by
   cases esc <;> rfl
 
+/-- `call_result_passthrough`: under autoescaping, a macro call's result and
+an imported module are interpolated as their own text. -/
+theorem call_result_passthrough (pol : UndefinedPolicy) (s name : String)
+    (exports : List (String × Value)) :
+    Piece.text pol (.value (wrapText true s) true) = .ok s ∧
+      Piece.text pol (.value (.module name exports s) true) = .ok s :=
+  ⟨rfl, rfl⟩
+
 end LeanJinja2

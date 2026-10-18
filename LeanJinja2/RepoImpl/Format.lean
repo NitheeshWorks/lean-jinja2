@@ -121,7 +121,7 @@ non-markup value (the `Markup.__mod__` case). -/
 def pctFormat (pol : UndefinedPolicy) (esc : Bool) (tmpl : String) (args : Value) :
     Except ValueError String := do
   let positional : List Value := match args with
-    | .tuple xs => xs
+    | .tuple xs | .namedTuple _ _ xs => xs
     | v => [v]
   let mapping : Option (List (Value × Value)) := match args with
     | .dict kvs => some kvs
@@ -209,7 +209,7 @@ def jsonDump (indent : Option Nat) (level : Nat) : Value → Except ValueError S
   | .float m s => .ok (decRepr m s)
   | .str s => .ok (jsonStr s)
   | .markup m => .ok (jsonStr m.str)
-  | .list xs | .tuple xs => do
+  | .list xs | .tuple xs | .namedTuple _ _ xs => do
     let items ← jsonDumpList indent (level + 1) xs
     pure (jsonWrap indent level "[" "]" items)
   | .dict kvs => do

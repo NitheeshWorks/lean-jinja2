@@ -202,6 +202,7 @@ def Value.typeName : Value → String
   | .tuple _ => "tuple" | .dict _ => "dict" | .macro .. => "Macro" | .native _ => "function"
   | .method .. => "builtin_function_or_method" | .loop .. => "LoopContext"
   | .superRef .. => "BlockReference" | .ns _ => "Namespace" | .module .. => "TemplateModule"
+  | .namedTuple c .. => c | .cycler _ => "Cycler" | .joiner _ => "Joiner"
 
 /-- Upstream `object_type_repr`. -/
 def Value.objectTypeRepr : Value → String
@@ -211,6 +212,8 @@ def Value.objectTypeRepr : Value → String
   | .loop .. => "jinja2.runtime.LoopContext object"
   | .ns _ => "jinja2.utils.Namespace object"
   | .module .. => "jinja2.environment.TemplateModule object"
+  | .cycler _ => "jinja2.utils.Cycler object"
+  | .joiner _ => "jinja2.utils.Joiner object"
   | v => s!"{v.typeName} object"
 
 /-- The message of an undefined value (upstream `_undefined_message`). -/
@@ -242,6 +245,10 @@ def Value.repr : Value → String
   | .superRef n _ => s!"<BlockReference '{n}'>"
   | .ns a => s!"<Namespace {a}>"
   | .module n .. => s!"<TemplateModule {pyStrRepr n}>"
+  | .namedTuple _ _ [x] => "(" ++ x.repr ++ ",)"
+  | .namedTuple _ _ xs => "(" ++ Value.reprList xs ++ ")"
+  | .cycler _ => "<jinja2.utils.Cycler object>"
+  | .joiner _ => "<jinja2.utils.Joiner object>"
 
 def Value.reprList : List Value → String
   | [] => ""
@@ -264,6 +271,8 @@ def Value.reprAcc (acc : String) : Value → String
   | .list xs => Value.reprListAcc (acc ++ "[") xs ++ "]"
   | .tuple [x] => Value.reprAcc (acc ++ "(") x ++ ",)"
   | .tuple xs => Value.reprListAcc (acc ++ "(") xs ++ ")"
+  | .namedTuple _ _ [x] => Value.reprAcc (acc ++ "(") x ++ ",)"
+  | .namedTuple _ _ xs => Value.reprListAcc (acc ++ "(") xs ++ ")"
   | .dict kvs => Value.reprPairsAcc (acc ++ "{") kvs ++ "}"
   | v => acc ++ v.repr
 
@@ -289,6 +298,16 @@ theorem Value.reprAcc_eq : ∀ (acc : String) (v : Value), Value.reprAcc acc v =
     rw [Value.reprAcc, Value.reprListAcc_eq]
     · simp [Value.repr, String.append_assoc]
     · intro z h; simp at h
+  | acc, .namedTuple _ _ [] => by
+    simp [Value.reprAcc, Value.reprListAcc, Value.repr, Value.reprList, String.append_assoc]
+  | acc, .namedTuple _ _ [x] => by
+    rw [Value.reprAcc, Value.reprAcc_eq]; simp [Value.repr, String.append_assoc]
+  | acc, .namedTuple _ _ (x :: y :: ys) => by
+    rw [Value.reprAcc, Value.reprListAcc_eq]
+    · simp [Value.repr, String.append_assoc]
+    · intro z h; simp at h
+  | acc, .cycler _ => by simp [Value.reprAcc]
+  | acc, .joiner _ => by simp [Value.reprAcc]
   | acc, .dict kvs => by
     rw [Value.reprAcc, Value.reprPairsAcc_eq]; simp [Value.repr, String.append_assoc]
   | acc, .none => by simp [Value.reprAcc]
@@ -351,7 +370,7 @@ def Value.truthy : Value → Bool
   | .str s => !s.isEmpty
   | .markup m => !m.str.isEmpty
   | .list xs => !xs.isEmpty
-  | .tuple xs => !xs.isEmpty
+  | .tuple xs | .namedTuple _ _ xs => !xs.isEmpty
   | .dict kvs => !kvs.isEmpty
   | _ => true
 
@@ -394,7 +413,9 @@ mutual
 def Value.pyEq : Value → Value → Bool
   | .none, .none => true
   | .list xs, .list ys => Value.pyEqList xs ys
-  | .tuple xs, .tuple ys => Value.pyEqList xs ys
+  | .tuple xs, .tuple ys | .namedTuple _ _ xs, .namedTuple _ _ ys
+  | .tuple xs, .namedTuple _ _ ys | .namedTuple _ _ xs, .tuple ys => Value.pyEqList xs ys
+  | .cycler a, .cycler b | .joiner a, .joiner b => a == b
   | .dict a, .dict b => a.length == b.length && Value.pyDictSub a b
   | .undef _, .undef _ => true
   | .ns a, .ns b => a == b
@@ -436,7 +457,8 @@ mutual
 /-- Python ordering, or a `TypeError` message. -/
 def Value.pyCmp : Value → Value → Except String Ordering
   | .list xs, .list ys => Value.pyCmpList xs ys
-  | .tuple xs, .tuple ys => Value.pyCmpList xs ys
+  | .tuple xs, .tuple ys | .namedTuple _ _ xs, .namedTuple _ _ ys
+  | .tuple xs, .namedTuple _ _ ys | .namedTuple _ _ xs, .tuple ys => Value.pyCmpList xs ys
   | a, b =>
     match a.num?, b.num? with
     | some x, some y => .ok (decCmp x y)

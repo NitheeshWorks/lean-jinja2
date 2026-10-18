@@ -100,6 +100,15 @@ text, whether or not autoescaping is on. -/
 def markupPassthrough : Prop :=
   ∀ (pol : UndefinedPolicy) (m : Markup) (esc : Bool), Piece.text pol (.value (.markup m) esc) = .ok m.str
 
+/-- `call_result_passthrough`: under autoescaping, what a macro call,
+`caller()`, `super()` or a call block returns (its body's rendered text,
+`wrapText true s`) and an imported template module contribute their own
+text: they are not escaped a second time when interpolated. -/
+def callResultPassthrough : Prop :=
+  ∀ (pol : UndefinedPolicy) (s name : String) (exports : List (String × Value)),
+    Piece.text pol (.value (wrapText true s) true) = .ok s ∧
+      Piece.text pol (.value (.module name exports s) true) = .ok s
+
 end Spec
 
 end LeanJinja2

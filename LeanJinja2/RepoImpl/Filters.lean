@@ -1,5 +1,7 @@
 import LeanJinja2.RepoImpl.Format
 import LeanJinja2.RepoImpl.Unique
+import LeanJinja2.RepoImpl.Random
+import LeanJinja2.RepoImpl.Urlize
 
 /-!
 # Builtin filters and tests
@@ -10,8 +12,8 @@ from the environment and evaluation context: the autoescape flag, the
 undefined policy, the namespace heap, `truncate.leeway`, and the host's
 custom filters and tests.
 
-Not provided: `random` (nondeterministic), `urlize`, `wordwrap`'s hyphen
-rules; see `docs/traceability.toml`.
+`random` draws from the explicit source of `Random`. Not provided:
+`wordwrap`'s hyphen rules; see `docs/traceability.toml`.
 -/
 
 namespace LeanJinja2
@@ -29,6 +31,12 @@ structure FCtx where
   filters : List (String × NativeFn) := []
   tests : List (String × NativeFn) := []
   vars : List (String × Value) := []
+  /-- The state of the random source (see `Random`). -/
+  rng : UInt64 := 0
+  /-- `policies["urlize.rel"]`, `["urlize.target"]`, `["urlize.extra_schemes"]`. -/
+  urlizeRel : Option String := some "noopener"
+  urlizeTarget : Option String := none
+  urlizeExtraSchemes : List String := []
 
 instance : Inhabited FCtx := ⟨{}⟩
 
@@ -189,10 +197,10 @@ def urlQuote (s : String) (forQs : Bool) : String :=
 def builtinFilters : List String :=
   ["abs", "attr", "batch", "capitalize", "center", "count", "d", "default", "dictsort", "e",
    "escape", "filesizeformat", "first", "float", "forceescape", "format", "groupby", "indent",
-   "int", "join", "last", "length", "list", "lower", "items", "map", "min", "max", "pprint",
+   "int", "join", "last", "length", "list", "lower", "items", "map", "min", "max", "pprint", "random",
    "reject", "rejectattr", "replace", "reverse", "round", "safe", "select", "selectattr",
    "slice", "sort", "string", "striptags", "sum", "title", "trim", "truncate", "unique",
-   "upper", "urlencode", "wordcount", "wordwrap", "xmlattr", "tojson"]
+   "upper", "urlencode", "urlize", "wordcount", "wordwrap", "xmlattr", "tojson"]
 
 /-- The names of the builtin tests. -/
 def builtinTests : List String :=
@@ -230,7 +238,7 @@ def cmpTest (op : String) (a b : Value) : Except ValueError Bool :=
 
 /-- Whether a value is callable. -/
 def Value.isCallable : Value → Bool
-  | .macro .. | .native _ | .method .. | .superRef .. => true
+  | .macro .. | .native _ | .method .. | .superRef .. | .joiner _ => true
   | .loop _ _ _ _ _ (some _) _ => true
   | _ => false
 
@@ -271,11 +279,11 @@ def applyTest (fc : FCtx) (name : String) (v : Value) (args : List Value)
   | "mapping" => pure (match v with | .dict _ => true | _ => false)
   | "number" => pure (v.num?.isSome)
   | "sequence" => pure (match v with
-      | .list _ | .tuple _ | .str _ | .markup _ | .dict _ => true
+      | .list _ | .tuple _ | .namedTuple .. | .str _ | .markup _ | .dict _ => true
       | .undef _ => fc.pol != .strict
       | _ => false)
   | "iterable" => pure (match v with
-      | .list _ | .tuple _ | .str _ | .markup _ | .dict _ | .ns _ => true
+      | .list _ | .tuple _ | .namedTuple .. | .str _ | .markup _ | .dict _ | .ns _ => true
       | .undef _ => fc.pol != .strict
       | _ => false)
   | "callable" => pure v.isCallable
@@ -283,7 +291,8 @@ def applyTest (fc : FCtx) (name : String) (v : Value) (args : List Value)
     match a0 "other" with
     | some o => pure (match v, o with
         | .none, .none => true | .bool a, .bool b => a == b
-        | .ns a, .ns b => a == b | .undef _, .undef _ => false
+        | .ns a, .ns b | .cycler a, .cycler b | .joiner a, .joiner b => a == b
+        | .undef _, .undef _ => false
         | .int a, .int b => a == b && a ≥ -5 && a ≤ 256
         | _, _ => false)
     | none => typeErr "test_sameas() missing 1 required positional argument: 'other'"
@@ -637,7 +646,7 @@ def Filters.groupby (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
       do
         let shown ← if cs then pure k else attrGet fc attr dflt x
         let more ← groups fuel others
-        pure (.tuple [shown, .list members] :: more)
+        pure (.namedTuple "_GroupTuple" ["grouper", "list"] [shown, .list members] :: more)
   pure (.list (← groups (sorted.length + 1) sorted))
 
 /-- Upstream filter `indent`. -/
@@ -1025,10 +1034,10 @@ def Filters.urlencode (fc : FCtx) (v : Value) (args : List Value) (kwargs : List
       let x ← strOf pol p.2
       pure (urlQuote k true ++ "=" ++ urlQuote x true))
     pure (.str ("&".intercalate parts))
-  | .list xs | .tuple xs => do
+  | .list xs | .tuple xs | .namedTuple _ _ xs => do
     let parts ← xs.mapM (fun p => do
       match p with
-      | .tuple [k, x] | .list [k, x] => do
+      | .tuple [k, x] | .list [k, x] | .namedTuple _ _ [k, x] => do
         let k ← strOf pol k
         let x ← strOf pol x
         pure (urlQuote k true ++ "=" ++ urlQuote x true)
@@ -1065,6 +1074,76 @@ def Filters.xmlattr (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (
   | .dict kvs => xmlAttr fc kvs autospace
   | _ => typeErr "xmlattr requires a mapping"
 
+/-- Python `str.split()`: the runs of non-space characters. -/
+def splitWords (s : String) : List String :=
+  let rec go : List Char → List Char → List String → List String
+    | [], cur, acc => (if cur.isEmpty then acc else String.ofList cur.reverse :: acc).reverse
+    | c :: r, cur, acc =>
+      if isSpace c then go r [] (if cur.isEmpty then acc else String.ofList cur.reverse :: acc)
+      else go r (c :: cur) acc
+  go s.toList [] []
+
+/-- Sorted and without duplicates (Python `sorted(set(xs))`). -/
+def sortedSet (xs : List String) : List String :=
+  let rec dedup : List String → List String
+    | a :: b :: r => if a == b then dedup (b :: r) else a :: dedup (b :: r)
+    | r => r
+  dedup (xs.mergeSort (fun a b => compare a b != .gt))
+
+/-- Upstream filter `urlize` (`do_urlize`): the `rel` words, `nofollow` and
+the `urlize.rel` policy are merged, sorted; `target` and `extra_schemes`
+default to their policies; each extra scheme must match `_uri_scheme_re`. -/
+def Filters.urlize (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
+    Except ValueError Value := do
+  let a := argAt args kwargs
+  let pol := fc.pol
+  let trim ← match a 0 "trim_url_limit" with
+    | none | some .none => pure none
+    | some x => match x.asInt? with
+      | some i => pure (some i)
+      | none => typeErr s!"'>' not supported between instances of 'int' and '{x.typeName}'"
+  let nofollow := ((a 1 "nofollow").map Value.truthy).getD false
+  let relWords ← match a 3 "rel" with
+    | some x =>
+      if !x.truthy then pure [] else
+      match x.text? with
+      | some t => pure (splitWords t)
+      | none => typeErr s!"'{x.typeName}' object has no attribute 'split'"
+    | none => pure []
+  let rel := " ".intercalate (sortedSet (relWords ++ (if nofollow then ["nofollow"] else []) ++
+    splitWords (fc.urlizeRel.getD "")))
+  let target : Value := match a 2 "target" with
+    | none | some .none => (fc.urlizeTarget.map Value.str).getD .none
+    | some x => x
+  let targetAttr ← if target.truthy then do
+      let m ← escapeOf pol target
+      pure s!" target=\"{m.str}\""
+    else pure ""
+  let schemes ← match a 4 "extra_schemes" with
+    | none | some .none => pure fc.urlizeExtraSchemes
+    | some x => do
+      let xs ← iterOf pol fc.heap x
+      xs.mapM (fun s => match s.text? with
+        | some t => pure t
+        | none => typeErr s!"expected string or bytes-like object, got '{s.typeName}'")
+  match schemes.find? (fun s => !uriSchemeOk s) with
+  | some s => .error (.runtime s!"{pyStrRepr s} is not a valid URI scheme prefix.")
+  | none =>
+  let relAttr := if rel.isEmpty then "" else s!" rel=\"{(escape rel).str}\""
+  let text ← escapeOf pol v
+  let out := urlizeText { trim, relAttr, targetAttr, extraSchemes := schemes } text.str
+  pure (if fc.autoescape then .markup (Markup.markSafe out) else .str out)
+
+/-- Upstream filter `random`, drawing from the source state `fc.rng`. A
+direct `|random` advances the render's source (`Render.applyFilterM`); one
+`map('random')` reads it once. -/
+def Filters.random (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
+    Except ValueError Value :=
+  match args, kwargs with
+  | [], [] => (randomChoice fc.pol fc.heap fc.rng v).map Prod.fst
+  | _, (k, _) :: _ => typeErr s!"do_random() got an unexpected keyword argument '{k}'"
+  | _, [] => typeErr s!"do_random() takes 2 positional arguments but {args.length + 2} were given"
+
 /-- The builtin filters by name (upstream `FILTERS`); `apply` is the filter
 lookup `map` calls by name. -/
 def builtinFilterTable (apply : String → Value → List Value → List (String × Value) →
@@ -1099,6 +1178,7 @@ def builtinFilterTable (apply : String → Value → List Value → List (String
   ("min", Filters.min true),
   ("max", Filters.min false),
   ("pprint", Filters.pprint),
+  ("random", Filters.random),
   ("select", Filters.select false true),
   ("reject", Filters.select false false),
   ("selectattr", Filters.select true true),
@@ -1118,6 +1198,7 @@ def builtinFilterTable (apply : String → Value → List Value → List (String
   ("truncate", Filters.truncate),
   ("unique", Filters.unique),
   ("urlencode", Filters.urlencode),
+  ("urlize", Filters.urlize),
   ("wordcount", Filters.wordcount),
   ("wordwrap", Filters.wordwrap),
   ("xmlattr", Filters.xmlattr)]
