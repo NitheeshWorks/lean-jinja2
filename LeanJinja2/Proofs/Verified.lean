@@ -2,6 +2,7 @@ import LeanJinja2.Proofs.Lexer
 import LeanJinja2.Proofs.Roundtrip
 import LeanJinja2.Proofs.Render
 import LeanJinja2.Proofs.Semantics
+import LeanJinja2.Proofs.Total
 import LeanJinja2.Specifications
 
 /-!
@@ -14,9 +15,8 @@ construct a `Verified<Layer>` value without every proof in hand. If a stated
 specification turns out false, its slot's type flips to a refutation rather
 than being dropped, so this file stays an honest map of what is verified.
 
-`render_total` has no slot: the renderer is total by construction (no
-`partial`), and that a depth budget suffices is tested, not proved (see
-CONTRIBUTING.md).
+`render_total` sits with the rendering properties: a template that does not
+recurse cannot exhaust the depth budget that `Environment.compile` checks.
 -/
 
 namespace LeanJinja2
@@ -44,12 +44,15 @@ structure VerifiedRender where
   autoescapeEscaped : Spec.autoescapeEscaped
   /-- `markup_passthrough`. -/
   markupPassthrough : Spec.markupPassthrough
+  /-- `render_total`. -/
+  renderTotal : Spec.renderTotal
 
 theorem theVerifiedRender : VerifiedRender where
   renderLiterals := render_literals
   autoescapeSound := autoescape_sound
   autoescapeEscaped := autoescape_escaped
   markupPassthrough := markup_passthrough
+  renderTotal := render_total
 
 /-- Loop variables, undefined values, inheritance and filters. -/
 structure VerifiedSemantics where

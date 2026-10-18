@@ -39,6 +39,22 @@ be a Hoare triple over a heap.
   for the canonical print of a well-formed template, because fuel is monotone
   (`Reads`) and a node of size `n` needs at most `40 n + 40`. The renderer
   takes `Environment.maxDepth` (default 1000) as its recursion budget.
+  `Environment.compile` refuses a template whose nesting needs more
+  (`renderBudget body = 3 * nodesDepth body + 2`) with `RecursionError`, and
+  `render_total` shows that a template that passes, and does not recurse
+  through macros, `include`, `extends`, `super()` or `loop()`, never runs out.
+* **Errors by layer.** The value layer (filters, tests, methods, attribute
+  access, arithmetic) returns `ValueError`, which has no `RecursionError`
+  constructor, so no filter can exhaust the budget and `render_total` needs
+  no argument per filter. Only the renderer (`RenderError`) has
+  `fuelExhausted`.
+* **Linear time on hostile input.** The lexer loop is tail recursive and
+  tracks the position from each step's tokens. Node lists and loops collect
+  their output as chunks and join them once, and loop values are computed in
+  one pass (`loopValues_eq` ties them to `loopValue`). `range` is
+  upstream's sandboxed `safe_range` (`MAX_RANGE = 100000`). `lake exe bench`
+  bounds the time at `10^4` and `10^5` nesting; complexity is tested, not
+  stated in Lean.
 * **`_ext` lemmas.** A decoder lemma holds on any continuation of the buffer and
   reports the final position, so field lemmas compose. Do not add a lemma that
   only holds at the end of a buffer; it is unusable one field later.
@@ -47,28 +63,25 @@ be a Hoare triple over a heap.
 * **The gate.** `scripts/check.sh` runs what CI runs: build, `sorry` grep,
   `scripts/Axioms.lean` (every theorem under `LeanJinja2` reaches only `propext`,
   `Quot.sound`, `Classical.choice`), `lake exe props`, `lake exe conformance`,
-  the traceability check.
+  `lake exe bench`, the traceability check. Run heavy commands through
+  `stack-tools/capped` (see the workspace AGENT-BRIEF).
 
 ### Tested, not proved
 
 Listed here with the reason, and in `docs/traceability.toml` with
 `status = "tested"`.
 
-* **`render_total`**: rendering terminates, and the default `maxDepth` is
-  enough for any template without runaway recursion. Termination holds by
-  construction, since there is no `partial`. Proving that the budget suffices
-  would need a fuel argument for each of the 52 builtin filters. Instead,
-  `tests/Props.lean` (`renderTotal`) renders generated templates with nested
-  `if`, `for`, `with`, filter blocks and autoescape blocks, and checks that
-  none returns `fuelExhausted`. `Proofs/Verified.lean` has no slot for it.
+* **Time bounds** (`tests/Bench.lean`): linear lexing, parsing and rendering
+  on deeply nested and long templates, and the `range` cap.
 * **`sort`, `unique`, `trim`, `wordcount`, `center`** are covered by property
   tests and by the upstream cases in `tests/Conformance.lean`. The properties
   are: a sorted permutation, first occurrences in order, no surrounding
   whitespace, the word count, and the text centred in the width. The other
   filters without an equation in `Proofs/Filters.lean` are covered by
   conformance cases only.
-* **`parse_pretty_roundtrip`** is proved. `printParse` in `tests/Props.lean`
-  is an executable cross-check of the same statement on generated templates.
+* **`parse_pretty_roundtrip`** and **`render_total`** are proved.
+  `printParse` and `renderTotal` in `tests/Props.lean` are executable
+  cross-checks of the same statements on generated templates.
 
 ### Deviations from upstream
 
@@ -89,6 +102,12 @@ Each one has a `docs/traceability.toml` row (`deviation` or `excluded`).
 * **Unknown escapes** (UP-047). `'\q'` and `'\é'` both keep the backslash.
   Upstream keeps it before an ASCII character but turns `'\é'` into the text
   `\xe9`.
+* **Deep templates.** `compile` raises `RecursionError` for nesting beyond
+  `(maxDepth - 2) / 3` levels (332 by default). Upstream fails on deep
+  templates too, but at limits set by Python: past about 100 nested blocks
+  ("too many levels of indentation") or 69 nested parentheses.
+* **Sandboxed `range`.** As upstream's `SandboxedEnvironment`, `range` refuses
+  more than 100000 items with `OverflowError`.
 * **`title` on markup** (UP-048) follows upstream: the result is a plain
   string, so it is escaped again under autoescape.
 

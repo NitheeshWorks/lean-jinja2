@@ -95,7 +95,7 @@ def genBody : Nat → Rng → List Node × Rng
 def vars : List (String × Value) := [("s", "a<b"), ("xs", .list [1, 2, 3]), ("n", 0)]
 
 def renderTotal : Property where
-  name := "render_total: generated templates render within the depth budget"
+  name := "render_total on generated templates (executable cross-check)"
   check r :=
     let (body, r) := genBody 6 r
     let t : Template := ⟨{}, none, body⟩

@@ -63,11 +63,12 @@ test = ["tests/Conformance.lean"]
 [[requirement]]
 id = "render.total"
 upstream = "docs/api.rst#jinja2.Template.render"
-title = "Rendering terminates and the depth budget suffices"
-status = "tested"
-realises = ["LeanJinja2.Template.render"]
-test = ["tests/Props.lean"]
-note = "The renderer is total by construction (no partial). That the default maxDepth never runs out on a template without runaway recursion would need a per-filter fuel argument; it is tested by the render_total property instead."
+title = "A template that does not recurse never raises RecursionError within its depth budget"
+status = "implemented"
+realises = ["LeanJinja2.Template.render", "LeanJinja2.renderBudget", "LeanJinja2.nodesNonrec", "LeanJinja2.Environment.compile"]
+theorem = ["LeanJinja2.render_total", "LeanJinja2.render_total_fromString", "LeanJinja2.compile_budget"]
+test = ["tests/Props.lean", "tests/Bench.lean"]
+note = "nodesNonrec excludes include, extends, macro and call tags and allows calls only to range, dict and namespace by name. Filters, tests and attribute access are unrestricted: the value layer's error type (ValueError) has no RecursionError constructor. compile refuses templates whose nesting exceeds the budget (3 * depth + 2 <= maxDepth) with RecursionError, as upstream fails on deep templates."
 
 [[requirement]]
 id = "tags.for"
@@ -205,3 +206,13 @@ status = "implemented"
 realises = ["LeanJinja2.Filters.title"]
 test = ["tests/Conformance.lean"]
 note = "Follows upstream byte for byte, including the double escape recorded as upstream defect UP-048."
+
+[[requirement]]
+id = "safety.linear"
+upstream = "src/jinja2/lexer.py (Lexer.tokeniter), src/jinja2/parser.py"
+title = "Lexing, parsing and rendering are linear in the template; deep nesting fails fast"
+status = "tested"
+realises = ["LeanJinja2.Lex.loop", "LeanJinja2.renderNodes", "LeanJinja2.loopValues", "LeanJinja2.renderBudget"]
+theorem = ["LeanJinja2.loopValues_eq", "LeanJinja2.lex_print_roundtrip"]
+test = ["tests/Bench.lean"]
+note = "Complexity is not stated in Lean; lake exe bench bounds the time at 10^4 and 10^5 nesting (if, for, unclosed if, parentheses, sibling tags) and for range."

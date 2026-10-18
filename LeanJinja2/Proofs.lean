@@ -7,3 +7,4 @@ import LeanJinja2.Proofs.Semantics
 import LeanJinja2.Proofs.Parser.Body
 import LeanJinja2.Proofs.Roundtrip
 import LeanJinja2.Proofs.Verified
+import LeanJinja2.Proofs.Total

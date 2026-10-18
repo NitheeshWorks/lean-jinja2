@@ -57,6 +57,7 @@ All of these are machine-checked. `Proofs/Verified.lean` bundles them into
 | `autoescape_sound` | with autoescaping on throughout, `t.render vars = .ok out` implies `out` is the trace's literal text with every interpolated value escaped (markup unchanged) |
 | `autoescape_escaped` | each such escaped value satisfies lean-markupsafe's `IsEscaped` |
 | `render_literals` | every literal piece of the output is text from the template or one its loader holds |
+| `render_total` | a template without `include`, `extends`, `macro` or `call`, calling only `range`/`dict`/`namespace`, never raises `RecursionError` when `3 * nodesDepth body + 2 ≤ maxDepth`, which `compile` checks (`render_total_fromString`) |
 | `markup_passthrough` | an interpolated `Markup` value contributes its own text, with or without autoescaping |
 | `for_loop_vars` | in iteration `i`, `loop.index = i + 1`, `loop.first ↔ i = 0`, `loop.last ↔ i + 1 = length` (and `index0`, `revindex`, `depth`, `previtem`, `nextitem`) |
 | `undefined_policy` | how an undefined name prints under each of the four policies |
@@ -69,10 +70,9 @@ The refined entry points carry these results in their types:
 `API.pretty t h : {s // parse {} s = .ok t}`, and `API.render t vars`, whose
 output comes with the `autoescape_sound` statement.
 
-Tested rather than proved: that the default recursion budget is enough for
-rendering (`render_total`; the renderer is total by construction), and the
-`sort`, `unique`, `trim`, `wordcount` and `center` filters. See
-[CONTRIBUTING.md](CONTRIBUTING.md#tested-not-proved).
+Tested rather than proved: the `sort`, `unique`, `trim`, `wordcount` and
+`center` filters, and the time bounds on hostile templates (`lake exe bench`).
+See [CONTRIBUTING.md](CONTRIBUTING.md#tested-not-proved).
 
 ## What "verified" means here
 
@@ -91,6 +91,7 @@ rendering (`render_total`; the renderer is total by construction), and the
 lake build            # library, proofs, and both test executables
 lake exe props        # property tests (seeded; `lake exe props 42`)
 lake exe conformance  # cases re-expressed from the upstream test suite
+lake exe bench        # time bounds on hostile templates
 scripts/check.sh      # the whole CI gate, locally
 ```
 
@@ -100,7 +101,7 @@ Toolchain: `leanprover/lean4:v4.35.0` (pinned in `lean-toolchain`; `elan` instal
 
 Core slice complete: lexer, parser, renderer, 52 builtin filters, the
 builtin tests, inheritance, macros, and the dictionary and file system
-loaders. `tests/Conformance.lean` re-expresses 429 cases from the upstream
+loaders. `tests/Conformance.lean` re-expresses 433 cases from the upstream
 suite and all of them pass. `tests/Props.lean` holds 7 seeded properties.
 
 ## License

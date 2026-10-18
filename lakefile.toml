@@ -1,6 +1,6 @@
     name = "LeanJinja2"
     version = "0.1.0"
-    defaultTargets = ["LeanJinja2", "props", "conformance"]
+    defaultTargets = ["LeanJinja2", "props", "conformance", "bench"]
 
     # The verified library. Everything under LeanJinja2/ except Transport.lean is a
     # total function and the proof surface; see CONTRIBUTING.md.

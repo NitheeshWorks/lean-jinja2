@@ -27,6 +27,8 @@ jobs:
         run: lake exe props
       - name: Conformance
         run: lake exe conformance
+      - name: Hostile-template bench (time bounds at 10^4 and 10^5 nesting, MAX_RANGE)
+        run: lake exe bench
       - name: Traceability
         run: python3 scripts/traceability-check.py
 
