@@ -252,11 +252,11 @@ end LeanJinja2
 namespace LeanJinja2
 
 /-- Parse template source: lex, keep the significant tokens, parse
-(upstream `Environment.parse`). It lexes in place (`lexFast`); `parse_eq`
+(upstream `Environment.parse`). It lexes in place (`lexFastSig`); `parse_eq`
 states it through `lex`. -/
 def parse (cfg : LexConfig) (src : String) : Except ParseError (List Node) :=
-  match lexFast cfg src with
+  match lexFastSig cfg src with
   | .error e => .error ⟨e.msg, 0⟩
-  | .ok ts => parseTokens (significantL ts)
+  | .ok sig => parseTokens sig
 
 end LeanJinja2

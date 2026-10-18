@@ -304,7 +304,7 @@ def strViewProp : Property where
     let cell := if k == 3 then [("junk", Value.none)] else cell
     let want := (indexRef s.toList i).map String.singleton
     let (got, cell') := strIndexCached cell s i
-    let (again, _) := strIndexCached cell' s i
+    let (again, _) := strIndexCached (cell'.getD cell) s i
     let xs := s.toList.map (fun c => Value.str (String.singleton c))
     let gotL := (indexList xs.toArray i).map Value.toStr
     if got == want && again == want && strIndex s i == want &&

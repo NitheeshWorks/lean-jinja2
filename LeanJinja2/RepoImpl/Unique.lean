@@ -1,5 +1,5 @@
 import Std.Data.HashMap
-import LeanJinja2.RepoImpl.Values
+import LeanJinja2.RepoImpl.Runtime
 
 /-!
 # De-duplication with a hash of the value
@@ -181,5 +181,34 @@ theorem unique_eq_fast_apply (key : Value → Except ValueError Value) (xs : Lis
 
 @[csimp] theorem unique_eq_fast : @uniqueSpec = @uniqueFast := by
   funext key xs; exact unique_eq_fast_apply key xs
+
+/-! `unique` of a string reads its characters in place: no list of a value
+per character (a 10 MB string would need hundreds of MB). -/
+
+/-- `uniqueFast` over the characters of `s`, folding over the string itself. -/
+def uniqueStr (key : Value → Except ValueError Value) (s : String) : Except ValueError (List Value) := do
+  let (_, out) ← s.foldl (fun acc c => acc.bind (fun st => uniqueStep key st (.str (String.singleton c))))
+    (.ok ({}, #[]))
+  pure out.toList
+
+theorem foldlM_map_bind {α β γ ε : Type} (f : α → β → Except ε α) (g : γ → β) :
+    ∀ (l : List γ) (acc : Except ε α),
+      acc.bind (fun st => (l.map g).foldlM f st) = l.foldl (fun acc c => acc.bind (fun st => f st (g c))) acc
+  | [], acc => by cases acc <;> rfl
+  | c :: l, acc => by
+    rw [List.foldl_cons, ← foldlM_map_bind f g l]
+    cases acc with
+    | error e => rfl
+    | ok st =>
+      simp only [Except.bind, List.map_cons, List.foldlM_cons]
+      cases f st (g c) <;> rfl
+
+/-- `unique` of a string's characters, in place, is `unique` of its list of
+characters. -/
+theorem uniqueStr_eq (key : Value → Except ValueError Value) (s : String) :
+    uniqueStr key s = uniqueSpec key (charValues s) := by
+  rw [unique_eq_fast_apply, uniqueStr, uniqueFast, String.foldl_eq_foldl_toList, charValues,
+    ← foldlM_map_bind]
+  rfl
 
 end LeanJinja2

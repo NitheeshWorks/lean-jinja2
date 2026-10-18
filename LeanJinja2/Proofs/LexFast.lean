@@ -1007,7 +1007,7 @@ theorem parse_eq (cfg : LexConfig) (src : String) :
       | .error e => .error ⟨e.msg, 0⟩
       | .ok ts => parseTokens (significant ts) := by
   unfold parse
-  rw [lexFast_eq]
+  rw [lexFastSig_eq, lexFast_eq]
   cases lex cfg src with
   | error e => rfl
   | ok ts => simp [Except.map, significantL_light]

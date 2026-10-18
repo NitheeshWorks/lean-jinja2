@@ -1153,6 +1153,10 @@ def globalCases : List Case := [
     "<b>&lt;x&gt;</b>|<hr>&lt;T&gt;|&lt;T&gt;" (env := aeLibEnv),
   renders (IM ++ "test_from_import_autoescape") "{% from 'lib' import b %}{{ b('&') }}{{ b(b('\"')) }}"
     "<b>&amp;</b><b><b>&#34;</b></b>" (env := aeLibEnv),
+  renders (FL ++ "test_loop_in_include[unreferenced]")
+    "{% for x in [1,2] %}{% include 'i' %}{% endfor %}|{% for x in [1,2] %}{% include 'i' %}{{ loop.index }}{% endfor %}"
+    "[U][U]|[1]1[2]2"
+    (env := { loader := DictLoader [("i", "[{{ loop.index if loop is defined else 'U' }}]")] }),
   renders (API ++ "test_cycler_joiner_autoescape")
     "{% set c = cycler('<a>', '&') %}{{ c.next() }}{{ c.next() }}|{% set j = joiner('<br>') %}{% for x in [1,2] %}{{ j() }}{{ x }}{% endfor %}"
     "&lt;a&gt;&amp;|1&lt;br&gt;2" (env := { autoescape := .const true })

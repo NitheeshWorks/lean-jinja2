@@ -64,7 +64,10 @@ be a Hoare triple over a heap.
   length (`TokL`). Each of its helpers mirrors the specification helper of
   the same name, and `lexFast_eq` proves
   `lexFast cfg s = (lex cfg s).map (·.map Token.light)`; `parse_eq` restates
-  `parse` through `lex`. A helper that reads a bounded prefix matches on
+  `parse` through `lex`. The compiler and `parse` keep only the significant
+  kinds (`lexFastSig`, the same loop keeping `significantL` of each step;
+  `lexFastSig_eq`), so no list of every token is held; a syntax error lexes
+  again for its position. A helper that reads a bounded prefix matches on
   `l.take k` in the specification, so its twin reads only `k` characters.
   To add a lexer feature, change both and extend the step proofs in
   `Proofs/LexFast.lean`.
@@ -89,8 +92,20 @@ be a Hoare triple over a heap.
   Python-equal values share (`uniqueFast`, `bkey_of_pyEq`), and `repr`
   appends to one accumulator (`Value.reprAcc`); `unique_eq_fast` and
   `repr_eq_acc` are `@[csimp]` equalities with the list-based definitions,
-  and `sliceProp` checks slicing against indexing. Indexing `x[i]` stays
-  O(i): values are lists and UTF-8 strings.
+  and `sliceProp` checks slicing against indexing. `unique` of a string reads
+  its characters in place (`uniqueStr_eq`).
+* **Constant-time indexing.** `Value.list`, `.tuple` and `.namedTuple` hold
+  arrays, so `x[i]` and `len(x)` are O(1); functions that recurse over the
+  items match `⟨xs⟩` (the array's list). A string is UTF-8, so `s[i]` goes
+  through a view (`RepoImpl/StrIndex.lean`: the character count and every
+  16th byte offset, none for ASCII) that the renderer keeps for the last
+  string indexed in heap cell 1 (`getitemM`); `strViewProp` checks it against
+  indexing by definition. Heap cell 0 is the random source, so namespaces
+  start at address 2.
+* **The loop variable** exists only when the loop body names `loop` (or the
+  loop is recursive), as upstream's code generator decides: an included
+  template or a macro called from a body that does not name it sees no
+  `loop`. Loops that do not name it skip building the loop objects.
 * **`_ext` lemmas.** A decoder lemma holds on any continuation of the buffer and
   reports the final position, so field lemmas compose. Do not add a lemma that
   only holds at the end of a buffer; it is unusable one field later.
@@ -111,7 +126,11 @@ Listed here with the reason, and in `docs/traceability.toml` with
   and rendering on deeply nested and long templates, the `range` cap, and
   10 MB / 20 MB of plain text, `{{ x }}` with a 20 MB value (plain and
   autoescaped) and a 10 MB string literal within 2 s and 300 MB of peak
-  resident memory.
+  resident memory. Rows naming a jinja2 3.1.6 time compare against it:
+  indexing every position of 10^5 items or characters within 2x, a cycler
+  over 10^5 items, `unique` of a 10 MB string, and 10^6 tags in 700 MB
+  peak (upstream: 97 s and 12 GB). `urlize` of one 10 MB word is linear
+  but about 3.5x upstream.
 * **`sort`, `unique`, `trim`, `wordcount`, `center`** are covered by property
   tests and by the upstream cases in `tests/Conformance.lean`. The properties
   are: a sorted permutation, first occurrences in order, no surrounding

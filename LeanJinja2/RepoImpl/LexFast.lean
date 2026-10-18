@@ -547,6 +547,43 @@ def loop (cfg : LexConfig) (k : Ctx) :
         | .error e => .error e
         | .ok (ts, m', q) => loop cfg k fuel m' q (pos + consumed ts) (ts.reverse ++ acc)
 
+/-- `loop` keeping only the significant token kinds (`significantL`), the
+ones the parser reads: for the compiler, which then holds no list of all
+tokens. `loopSig_eq` relates it to `loop`. -/
+def loopSig (cfg : LexConfig) (k : Ctx) :
+    Nat → LexMode → s.Pos → Nat → List TokKind → Except LexError (List TokKind)
+  | fuel, m, p, pos, acc =>
+    if p = s.endPos then .ok acc.reverse
+    else match fuel with
+      | 0 => .error ⟨"lexer step bound exceeded", pos⟩
+      | fuel + 1 =>
+        match step cfg k m p pos with
+        | .error e => .error e
+        | .ok (ts, m', q) => loopSig cfg k fuel m' q (pos + consumed ts) ((significantL ts).reverse ++ acc)
+
+theorem significantL_append (a b : List TokL) :
+    significantL (a ++ b) = significantL a ++ significantL b := by
+  simp [significantL]
+
+theorem loopSig_eq (cfg : LexConfig) (k : Ctx) : ∀ (fuel : Nat) (m : LexMode) (p : s.Pos) (pos : Nat)
+    (acc : List TokL),
+    loopSig cfg k fuel m p pos (significantL acc.reverse).reverse = (loop cfg k fuel m p pos acc).map significantL
+  | fuel, m, p, pos, acc => by
+    unfold loopSig loop
+    split
+    · simp [Except.map]
+    · match fuel with
+      | 0 => simp [Except.map]
+      | fuel + 1 =>
+        simp only
+        cases step cfg k m p pos with
+        | error e => simp [Except.map]
+        | ok r =>
+          obtain ⟨ts, m', q⟩ := r
+          simp only
+          rw [← loopSig_eq cfg k fuel m' q (pos + consumed ts) (ts.reverse ++ acc)]
+          simp [significantL_append]
+
 end LexF
 
 /-- Tokenize template source in place (`lex`, for the compiler: kinds and
@@ -557,5 +594,26 @@ def lexFast (cfg : LexConfig) (src : String) : Except LexError (List TokL) :=
   match LexF.loop cfg (LexF.ctx cfg) (src.length - k + 1) (.root .line) body.startPos 0 [] with
   | .error e => .error e
   | .ok ts => .ok (ts ++ (if k = 0 then [] else [⟨.ws, k⟩]))
+
+/-- `lexFast` keeping only the significant token kinds (`lexFastSig_eq`). -/
+def lexFastSig (cfg : LexConfig) (src : String) : Except LexError (List TokKind) :=
+  let k := Lex.trailingNewlineLen cfg (src.takeEnd 2).copy.toList
+  let body := src.dropEnd k
+  LexF.loopSig cfg (LexF.ctx cfg) (src.length - k + 1) (.root .line) body.startPos 0 []
+
+theorem lexFastSig_eq (cfg : LexConfig) (src : String) :
+    lexFastSig cfg src = (lexFast cfg src).map significantL := by
+  unfold lexFastSig lexFast
+  generalize Lex.trailingNewlineLen cfg (src.takeEnd 2).copy.toList = k
+  have h := LexF.loopSig_eq cfg (LexF.ctx cfg) (src.length - k + 1) (.root .line) (src.dropEnd k).startPos 0 []
+  simp only [List.reverse_nil, significantL, List.filter_nil, List.map_nil] at h
+  simp only
+  rw [h]
+  cases LexF.loop cfg (LexF.ctx cfg) (src.length - k + 1) (.root .line) (src.dropEnd k).startPos 0 [] with
+  | error e => rfl
+  | ok ts =>
+    simp only [Except.map]
+    rw [LexF.significantL_append]
+    split <;> simp [significantL, TokKind.ignored]
 
 end LeanJinja2

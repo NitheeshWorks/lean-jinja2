@@ -462,7 +462,12 @@ theorem Good.eval_step : ∀ fr e, FrOK fr → e.nonrec = true → e.depth < n +
     refine Safe.bindT (ih.evals h ha (by omega)) fun av => ?_
     refine Safe.bindT (ih.evalKw h hk (by omega)) fun kv => ?_
     exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun p => ih.call fr fv p.1 p.2 hfv (by omega)
-  case h_18 x ops =>
+  case h_18 x op y =>
+    simp only [opsNonrec, opsDepth, Bool.and_true] at hn hd
+    refine Safe.bindT (ih.eval fr x h hn.1 (by omega)) fun _ => ?_
+    refine Safe.bindT (ih.eval fr y h hn.2 (by omega)) fun _ => ?_
+    exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun _ => Safe.pure' trivial
+  case h_19 x ops _ =>
     refine Safe.bindT (ih.eval fr x h hn.1 (by omega)) fun lv => ?_
     refine Safe.bindT Safe.get' fun hp => ?_
     refine Safe.bindT (Safe.foldlM' (fun _ => True) ops _ (fun b p hp _ => ?_) trivial) fun _ => Safe.pure' trivial
@@ -560,7 +565,7 @@ theorem Good.items_step : ∀ fr rec items, FrOK fr → rec.target.nonrec = true
 theorem Good.nodes_step : ∀ fr ns, FrOK fr → nodesNonrec ns = true → 3 * nodesDepth ns + 1 ≤ n + 1 →
     Safe (renderNodes env (n + 1) fr ns) (fun r => FrOK r.2) := by
   intro fr ns h hn hd
-  simp only [renderNodes]
+  rw [renderNodes_succ]
   refine Safe.bind' (Safe.foldlM' (fun st : List (List Piece) × Frame => FrOK st.2) ns ([], fr)
     (fun st nd hnd hst => ?_) h) fun st hst => ?_
   · obtain ⟨acc, f⟩ := st
@@ -586,10 +591,12 @@ theorem Good.loop_step : ∀ fr rec rc items d, FrOK fr → rec.target.nonrec = 
   · refine Safe.bindT Safe.get' fun heap => Safe.bindT (Safe.modify' _) fun _ => ?_
     refine Safe.bindT (Safe.foldlM' (fun _ => True) _ [] (fun acc p _ _ => ?_) trivial) fun _ => Safe.pure' trivial
     obtain ⟨x, loopV⟩ := p
-    refine Safe.bindT Safe.get' fun heap' => Safe.bind' (Safe.bindPlain ht) fun binds hbs => ?_
-    have hfr : FrOK { { fr with top := false } with locals := binds ++ ("loop", loopV) :: fr.locals } :=
-      h.with_locals rfl rfl rfl ⟨binds ++ [("loop", loopV)], hbs.append (Plain.loop loopV), Or.inl (by simp)⟩
-    refine Safe.bind' (ih.nodes _ rec.body hfr hb (by omega)) fun r _ => ?_
+    simp only [bindTargetM_eq]
+    refine Safe.bind' (Safe.bindT Safe.get' fun _ => Safe.bindPlain ht) fun binds hbs => ?_
+    refine Safe.bind' (ih.nodes _ rec.body ?_ hb (by omega)) fun r _ => ?_
+    · split
+      · exact h.with_locals rfl rfl rfl ⟨binds ++ [("loop", loopV)], hbs.append (Plain.loop loopV), Or.inl (by simp)⟩
+      · exact h.with_locals rfl rfl rfl ⟨binds, hbs, Or.inl (by simp)⟩
     obtain ⟨ps, _⟩ := r
     exact Safe.pure' trivial
 

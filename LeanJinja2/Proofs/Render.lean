@@ -225,7 +225,8 @@ theorem inv_nodes_step {env L ae n} (ih : Inv env L ae n) :
     ∀ fr body s r s', FrameOK L ae fr → BodyOK L ae body →
      renderNodes env (n + 1) fr body s = .ok (r, s') → TraceOK L ae r.1 ∧ Same fr r.2 := by
   intro fr body s r s' hf hb h
-  simp only [renderNodes, StateT.run_bind_ok, StateT.run_pure_ok] at h
+  rw [renderNodes_succ] at h
+  simp only [StateT.run_bind_ok, StateT.run_pure_ok] at h
   obtain ⟨⟨cs, f1⟩, s1, hfold, rfl, -⟩ := h
   have := foldlM_inv (fun (st : List (List Piece) × Frame) => (∀ c ∈ st.1, TraceOK L ae c) ∧ Same fr st.2) _ body
     (fun ⟨acc, f⟩ node s ⟨acc', f'⟩ s' hn ⟨ht, hs⟩ hstep => by
@@ -380,8 +381,8 @@ theorem inv_loop_step {env L ae n} (ih : Inv env L ae n) :
     obtain ⟨_, _, -, _, _, -, cs, s2, h, rfl, -⟩ := h
     refine TraceOK.chunks (foldlM_inv (fun cs => ∀ c ∈ cs, TraceOK L ae c) _ _
       (fun acc p s acc' s' _ hacc hstep => ?_) [] _ cs s2 (fun _ h => by cases h) h)
-    simp only [StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok] at hstep
-    obtain ⟨_, _, -, binds, _, -, ⟨ps2, f2⟩, _, hr, rfl, -⟩ := hstep
+    simp only [bindTargetM_eq, StateT.run_bind_ok, StateT.run_pure_ok, liftR_ok] at hstep
+    obtain ⟨binds, _, -, ⟨ps2, f2⟩, _, hr, rfl, -⟩ := hstep
     intro c hc
     rcases List.mem_cons.mp hc with rfl | hc
     · exact (ih.1 _ _ _ _ _ (by exact ⟨hf.1, hf.2.1, hf.2.2⟩) hb hr).1

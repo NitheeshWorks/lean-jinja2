@@ -1,4 +1,5 @@
-import LeanJinja2
+import LeanJinja2.RepoImpl.Template
+import LeanJinja2.RepoImpl.Pretty
 
 /-!
 # Hostile-template bench: time and memory bounds
@@ -51,6 +52,10 @@ bound in milliseconds and the peak-memory bound in MB (0: none). -/
 structure Bench where
   name : String
   run : Unit → Except TemplateError String
+  /-- An input built before the clock starts, for `runOn` (rows comparing
+  against upstream's render time, which excludes building the input). -/
+  input : Unit → Value := fun _ => .none
+  runOn : Option (Value → Except TemplateError String) := none
   ok : Except TemplateError String → Bool
   boundMs : Nat
   boundMB : Nat := 0
@@ -191,18 +196,34 @@ def globalOps : List Bench := [
 
 /-- `x[i]` in a loop over every position: constant time per index. -/
 def indexOps : List Bench := [
-  { name := "x[i] for every i of 10^5 items",
-    run := fun u => render "{% for i in range(100000) %}{% if x[i] == i %}.{% endif %}{% endfor %}"
-      [("x", intsV 100000)] u,
-    ok := rendersLen 100000, boundMs := 300 },
-  { name := "s[i] for every i of a 10^5-char string",
-    run := fun u => render "{% for i in range(100000) %}{{ s[i] }}{% endfor %}"
-      [("s", .str (rep 10000 "abcdefghij"))] u,
-    ok := rendersLen 100000, boundMs := 300 },
-  { name := "s[-i - 1] for every i of a 10^5-char non-ASCII string",
-    run := fun u => render "{% for i in range(100000) %}{{ s[-i - 1] }}{% endfor %}"
-      [("s", .str (rep 10000 "abcdéfghi€"))] u,
-    ok := rendersLen 100000, boundMs := 300 } ]
+  { name := "x[i] for every i of 10^5 items (jinja2 3.1.6: 26 ms)",
+    run := fun _ => .ok "", input := fun _ => intsV 100000,
+    runOn := some fun x => render "{% for i in range(100000) %}{% if x[i] == i %}.{% endif %}{% endfor %}"
+      [("x", x)] (),
+    ok := rendersLen 100000, boundMs := 52 },
+  { name := "s[i] for every i of a 10^5-char string (jinja2 3.1.6: 24 ms)",
+    run := fun _ => .ok "", input := fun _ => .str (rep 10000 "abcdefghij"),
+    runOn := some fun s => render "{% for i in range(100000) %}{{ s[i] }}{% endfor %}" [("s", s)] (),
+    ok := rendersLen 100000, boundMs := 49 },
+  { name := "s[-i - 1] for every i of a 10^5-char non-ASCII string (jinja2 3.1.6: 33 ms)",
+    run := fun _ => .ok "", input := fun _ => .str (rep 10000 "abcdéfghi€"),
+    runOn := some fun s => render "{% for i in range(100000) %}{{ s[-i - 1] }}{% endfor %}" [("s", s)] (),
+    ok := rendersLen 100000, boundMs := 100 },
+  { name := "unique of a 10 MB string (jinja2 3.1.6: 3 s)",
+    run := fun u => render "{{ s|unique|list|length }}" [("s", .str (plain 10000000))] u,
+    ok := rendersText "18", boundMs := 3000, boundMB := 200 },
+  { name := "10^6 tags a{{ x }} (8 MB; jinja2 3.1.6: 97 s, 12 GB)",
+    run := fun u => render (rep 1000000 "a{{ x }}") [("x", .str "b")] u,
+    ok := rendersLen 2000000, boundMs := 10000, boundMB := 700 },
+  { name := "urlize of a 10 MB word (jinja2 3.1.6: ~250 ms)",
+    run := fun _ => .ok "", input := fun _ => .str (rep 1000000 "www.ab.cd/"),
+    runOn := some fun s => render "{{ s|urlize|length }}" [("s", s)] (),
+    ok := fun r => match r with | .ok _ => true | _ => false, boundMs := 1500 },
+  { name := "cycler of 10^5 items, 10^5 next() (jinja2 3.1.6: 222 ms)",
+    run := fun _ => .ok "", input := fun _ => intsV 100000 10,
+    runOn := some fun x =>
+      render "{% set c = cycler(*x) %}{% for i in range(100000) %}{{ c.next() }}{% endfor %}" [("x", x)] (),
+    ok := rendersLen 100000, boundMs := 444 } ]
 
 def benches : List Bench :=
   big ++ valueOps ++ globalOps ++ indexOps ++ sized 10000 2000 ++ sized 100000 20000 ++ [
@@ -247,6 +268,14 @@ def probe (phase : String) (n : Nat) : IO UInt32 := do
     | "var" => match render "{{ x }}" [("x", .str src)] () with
       | .ok s => s!"{s.length} chars" | .error e => toString e
     | "gen" => s!"{src.length} chars"
+    | "tagslex" => match lexFast {} (rep (n / 8) "a{{ x }}") with
+      | .ok ts => s!"{ts.length} tokens" | .error e => e.msg
+    | "tagsparse" => match parse {} (rep (n / 8) "a{{ x }}") with
+      | .ok b => s!"{b.length} nodes" | .error e => e.msg
+    | "tagscompile" => match ({} : Environment).fromString (rep (n / 8) "a{{ x }}") with
+      | .ok t => s!"{t.body.length} nodes" | .error e => toString e
+    | "unique" => match render "{{ s|unique|list|length }}" [("s", .str src)] () with
+      | .ok s => s | .error e => toString e
     | "loop" => match render s!"\{% for i in range({n}) %}.\{% endfor %}" [] () with
       | .ok s => s!"{s.length} chars" | .error e => toString e
     | "xi" => match render s!"\{% for i in range({n}) %}\{% if x[i] == i %}.\{% endif %}\{% endfor %}"
@@ -274,8 +303,10 @@ def probe (phase : String) (n : Nat) : IO UInt32 := do
 def main (args : List String) : IO UInt32 := do
   if let "probe" :: "tpl" :: src :: _ := args then
     -- an ad-hoc template, with `x` 10^5 ints and `s` a 10^5-char string
+    let vars := [("x", intsV 100000), ("s", .str (rep 10000 "abcdefghij"))]
+    IO.println s!"inputs: {vars.length}, {match vars with | (_, .list xs) :: _ => xs.size | _ => 0}"
     let t0 ← IO.monoMsNow
-    let r := render src [("x", intsV 100000), ("s", .str (rep 10000 "abcdefghij"))] ()
+    let r := render src vars ()
     let what := match r with | .ok s => s!"{s.length} chars" | .error e => toString e
     IO.println s!"{what} in {(← IO.monoMsNow) - t0} ms"
     return 0
@@ -284,8 +315,12 @@ def main (args : List String) : IO UInt32 := do
   let mut failures := 0
   for b in benches do
     resetPeak
+    let inp := b.input ()
+    let size := match inp with | .list xs => xs.size | .str t => t.utf8ByteSize | _ => 0
     let t0 ← IO.monoMsNow
-    let r := b.run ()
+    let r := match b.runOn with
+      | some f => if size == 0 then b.run () else f inp
+      | none => b.run ()
     let good := b.ok r
     let t1 ← IO.monoMsNow
     let ms := t1 - t0

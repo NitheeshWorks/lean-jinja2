@@ -1017,10 +1017,13 @@ def Filters.unique (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
   do
   let cs := ((a 0 "case_sensitive").map Value.truthy).getD false
   let attr := (a 1 "attribute").getD .none
-  let xs ← iter v
-  let out ← uniqueSpec (fun x => do
+  let key := fun x => do
     let k ← attrGet fc attr none x
-    pure (if cs then k else ignoreCase k)) xs
+    pure (if cs then k else ignoreCase k)
+  -- a string's characters are read in place (`uniqueStr_eq`)
+  let out ← match v with
+    | .str s | .markup ⟨s⟩ => uniqueStr key s
+    | _ => do let xs ← iter v; uniqueSpec key xs
   pure (.list out.toArray)
 
 /-- Upstream filter `urlencode`. -/

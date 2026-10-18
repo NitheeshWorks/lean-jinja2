@@ -298,4 +298,24 @@ status = "tested"
 realises = ["LeanJinja2.sliceV", "LeanJinja2.slicePick", "LeanJinja2.uniqueFast", "LeanJinja2.Value.reprAcc", "LeanJinja2.strIndex"]
 theorem = ["LeanJinja2.unique_eq_fast", "LeanJinja2.repr_eq_acc", "LeanJinja2.bkey_of_pyEq"]
 test = ["tests/Bench.lean", "tests/Props.lean", "tests/Conformance.lean"]
-note = "unique_eq_fast and repr_eq_acc are @[csimp] equalities with the list-based definitions. The array-based sliceV is checked against indexing the slice indices by a property (sliceProp). Time is not stated in Lean: lake exe bench bounds x[1:], x[::-1] and x[::2] on 10^6 items and a 10 MB string at 500 ms, unique of 10^5 ints at 200 ms, {{ x }} and pprint of 10^6 ints at 1 s, slice(10^5) at 500 ms and 10^4 string indexes at 1 s. Indexing x[i] into a list or string is O(i) (a list, UTF-8 text), so a template loop that indexes every position of a large value is quadratic, where Python is linear."
+note = "unique_eq_fast and repr_eq_acc are @[csimp] equalities with the list-based definitions; uniqueStr_eq that unique of a string read in place equals unique of its character list. The array-based sliceV is checked against indexing the slice indices by a property (sliceProp). Time is not stated in Lean: lake exe bench bounds x[1:], x[::-1] and x[::2] on 10^6 items and a 10 MB string at 500 ms, unique of 10^5 ints at 200 ms, unique of a 10 MB string at 3 s and 200 MB peak (was 870 MB), {{ x }} and pprint of 10^6 ints at 1 s, slice(10^5) at 500 ms and 10^4 string indexes at 1 s."
+
+[[requirement]]
+id = "safety.indexing"
+upstream = "src/jinja2/environment.py::Environment.getitem"
+title = "x[i] in constant time: array-backed lists and tuples, a cached position view for strings"
+status = "tested"
+realises = ["LeanJinja2.indexList", "LeanJinja2.getitemM", "LeanJinja2.strIndexCached", "LeanJinja2.strView", "LeanJinja2.revFlattenFast", "LeanJinja2.Piece.flattenFast", "LeanJinja2.bindTargetM"]
+theorem = ["LeanJinja2.revFlatten_eq_fast", "LeanJinja2.Piece.flatten_eq_fast", "LeanJinja2.bindTargetM_eq", "LeanJinja2.renderNodes_succ"]
+test = ["tests/Props.lean", "tests/Bench.lean"]
+note = "Value.list/.tuple hold arrays. s[i] reads the view of heap cell 1 (character count, every 16th byte offset, none for ASCII); strViewProp checks strIndexCached and indexList against indexing by definition, whatever the cell holds. Bench, with the input built before the clock: x[i] over 10^5 items 52 ms and s[i] over 10^5 characters 49 ms (jinja2 3.1.6: 26 and 24 ms), s[-i - 1] over a non-ASCII string 100 ms (33 ms; about 70 ms measured), cycler of 10^5 items with 10^5 next() 444 ms (222 ms)."
+
+[[requirement]]
+id = "safety.tag-memory"
+upstream = "src/jinja2/lexer.py"
+title = "Tag-dense templates: only the significant tokens are kept while compiling"
+status = "tested"
+realises = ["LeanJinja2.lexFastSig", "LeanJinja2.LexF.loopSig"]
+theorem = ["LeanJinja2.lexFastSig_eq", "LeanJinja2.LexF.loopSig_eq"]
+test = ["tests/Bench.lean"]
+note = "10^6 tags a{{ x }} (8 MB): about 56 bytes of peak memory a source byte over the bench's baseline, down from 91 (605 MB peak; bound 700 MB, 10 s). jinja2 3.1.6 takes 97 s and 12 GB on it."

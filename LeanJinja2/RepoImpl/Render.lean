@@ -58,6 +58,35 @@ def Piece.flatten (pol : UndefinedPolicy) (ps : List Piece) : Except ValueError 
   let ss ← ps.mapM (Piece.text pol)
   pure (String.join ss)
 
+/-- `Piece.flatten` appending each piece's text to the output as it goes,
+without the list of texts. -/
+def Piece.flattenGo (pol : UndefinedPolicy) : String → List Piece → Except ValueError String
+  | acc, [] => .ok acc
+  | acc, p :: ps =>
+    match Piece.text pol p with
+    | .ok t => Piece.flattenGo pol (acc ++ t) ps
+    | .error e => .error e
+
+theorem Piece.flattenGo_eq (pol : UndefinedPolicy) : ∀ (acc : String) (ps : List Piece),
+    Piece.flattenGo pol acc ps = (ps.mapM (Piece.text pol)).map (acc ++ String.join ·)
+  | acc, [] => by simp [Piece.flattenGo, Except.map, pure, Except.pure]
+  | acc, p :: ps => by
+    rw [Piece.flattenGo, List.mapM_cons]
+    cases Piece.text pol p with
+    | error e => simp [bind, Except.bind, Except.map]
+    | ok t =>
+      simp only [Piece.flattenGo_eq pol (acc ++ t) ps, bind, Except.bind]
+      cases ps.mapM (Piece.text pol) <;> simp [Except.map, pure, Except.pure, String.append_assoc]
+
+/-- `flatten` through `flattenGo`. -/
+def Piece.flattenFast (pol : UndefinedPolicy) (ps : List Piece) : Except ValueError String :=
+  Piece.flattenGo pol "" ps
+
+@[csimp] theorem Piece.flatten_eq_fast : @Piece.flatten = @Piece.flattenFast := by
+  funext pol ps
+  rw [Piece.flattenFast, Piece.flattenGo_eq, Piece.flatten]
+  cases ps.mapM (Piece.text pol) <;> simp [Except.map, bind, Except.bind, pure, Except.pure]
+
 /-- A block body in a block chain, with the settings of the template it came
 from. -/
 structure BlockEntry where
@@ -157,13 +186,52 @@ def getitemM (pol : UndefinedPolicy) (v k : Value) : RenderM Value := do
   match v, k with
   | .str s, .int i => do
     let (r, cell) := strIndexCached ((h[1]?).getD []) s i
-    set (h.set 1 cell)
+    if let some c := cell then set (h.set 1 c)
     pure (itemOr h v k (r.map Value.str))
   | .markup m, .int i => do
     let (r, cell) := strIndexCached ((h[1]?).getD []) m.str i
-    set (h.set 1 cell)
+    if let some c := cell then set (h.set 1 c)
     pure (itemOr h v k (r.map (fun t => .markup (Markup.markSafe t))))
+  | .list xs, .int i => pure (itemOr h v k (indexList xs i))
   | _, _ => liftR (getitemV pol h v k)
+
+/-- The pieces of chunks collected in reverse order (`chunks.reverse.flatten`). -/
+abbrev revFlatten {α : Type} (chunks : List (List α)) : List α := chunks.reverse.flatten
+
+/-- Prepend each chunk to the pieces after it (a one-piece chunk by a cons). -/
+def revFlattenGo {α : Type} : List (List α) → List α → List α
+  | [], acc => acc
+  | [p] :: cs, acc => revFlattenGo cs (p :: acc)
+  | c :: cs, acc => revFlattenGo cs (c ++ acc)
+
+/-- `revFlatten` without the intermediate list; a single chunk is returned as is. -/
+def revFlattenFast {α : Type} : List (List α) → List α
+  | [ps] => ps
+  | chunks => revFlattenGo chunks []
+
+theorem revFlattenGo_eq {α : Type} : ∀ (chunks : List (List α)) (acc : List α),
+    revFlattenGo chunks acc = chunks.reverse.flatten ++ acc
+  | [], acc => by simp [revFlattenGo]
+  | [p] :: cs, acc => by simp [revFlattenGo, revFlattenGo_eq cs]
+  | ([] :: cs), acc => by simp [revFlattenGo, revFlattenGo_eq cs]
+  | ((a :: b :: c) :: cs), acc => by simp [revFlattenGo, revFlattenGo_eq cs]
+
+@[csimp] theorem revFlatten_eq_fast : @revFlatten = @revFlattenFast := by
+  funext α chunks
+  unfold revFlatten revFlattenFast
+  split
+  · simp
+  · simpa using (revFlattenGo_eq _ []).symm
+
+/-- `bindTarget` on the current heap; a plain name binds without reading it. -/
+def bindTargetM (pol : UndefinedPolicy) (t : Target) (x : Value) : RenderM (List (String × Value)) :=
+  match t with
+  | .name n => pure [(n, x)]
+  | t => do let h ← get; liftR (bindTarget pol h t x)
+
+theorem bindTargetM_eq (pol : UndefinedPolicy) (t : Target) (x : Value) :
+    bindTargetM pol t x = (do let h ← get; liftR (bindTarget pol h t x)) := by
+  cases t <;> first | rfl | (funext s; simp [bindTargetM, bindTarget, liftR, get, getThe, MonadStateOf.get, StateT.get, bind, StateT.bind, pure, StateT.pure, Except.pure, Except.bind])
 
 /-- Store the random source's state (heap cell `0`). -/
 def setRng (heap : Heap) (s : UInt64) : Heap := heapSet heap 0 "state" (.int s.toNat)
@@ -234,14 +302,17 @@ def renderBudget (body : List Node) : Nat := 3 * nodesDepth body + 2
 syntax errors carry their line; unknown filters and duplicate blocks are
 `TemplateAssertionError`s. -/
 def Environment.compile (env : Environment) (src : String) : Except RenderError (List Node) :=
-  match lexFast env.toLexConfig src with
+  -- only the significant tokens are kept (`lexFastSig_eq`); a syntax error
+  -- lexes again for its position
+  match lexFastSig env.toLexConfig src with
   | .error e => .error (.syntax e.msg (lineOf src e.pos))
-  | .ok toks =>
-    let sig := significantL toks
+  | .ok sig =>
+    let total := sig.length
     match parseTokens sig with
     | .error e =>
       -- the offset of the significant token the parser stopped at
-      let idx := sig.length - e.remaining
+      let idx := total - e.remaining
+      let toks := match lexFast env.toLexConfig src with | .ok ts => ts | .error _ => []
       let rec posOf : List TokL → Nat → Nat → Nat
         | [], _, p => p
         | t :: ts, k, p =>
@@ -459,6 +530,12 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       | .undef i, _ => liftR (failUndef i)
       | _, .undef i => liftR (failUndef i)
       | _, _ => liftR (arith op lv rv)
+    | .compare x [(op, y)] => do
+      let lv ← evalE env n fr x
+      let rv ← evalE env n fr y
+      let h ← get
+      let ok ← liftR (compareOp pol h op lv rv)
+      pure (.bool ok)
     | .compare x ops => do
       let lv ← evalE env n fr x
       let h ← get
@@ -638,12 +715,15 @@ chunk, newest first, and joined once at the end, so a long list renders in
 linear time. -/
 def renderNodes (env : Environment) : Nat → Frame → List Node → RenderM (List Piece × Frame)
   | 0, _, _ => throw .fuelExhausted
+  | n + 1, fr, [node] => do
+    let (ps, fr') ← renderNode env n fr node
+    pure (if fr.top && fr.parent.isSome then [] else ps, fr')
   | n + 1, fr, nodes => do
     let (chunks, fr') ← nodes.foldlM (fun (st : List (List Piece) × Frame) (node : Node) => do
       let (acc, fr) := st
       let (ps, fr') ← renderNode env n fr node
       pure (if fr.top && fr.parent.isSome then acc else ps :: acc, fr')) ([], fr)
-    pure (chunks.reverse.flatten, fr')
+    pure (revFlatten chunks, fr')
 
 /-- Render one node. -/
 def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Piece × Frame)
@@ -809,15 +889,19 @@ def renderLoop (env : Environment) : Nat → Frame → LoopRec → Bool → List
     else
       let cell := (← get).length
       modify (· ++ [[]])
-      let chunks ← (loopValues items depth0 (if recursive then some rec else none) cell).foldlM
+      -- as upstream, `loop` exists only when the body names it (or the loop recurses)
+      let usesLoop := recursive || mentionsName "loop" rec.body
+      let pairs := if usesLoop then loopValues items depth0 (if recursive then some rec else none) cell
+        else items.map (fun x => (x, Value.none))
+      let chunks ← pairs.foldlM
           (fun (acc : List (List Piece)) (p : Value × Value) => do
         let (x, loopV) := p
-        let h ← get
-        let binds ← liftR (bindTarget pol h rec.target x)
-        let (ps, _) ← renderNodes env n { inner with locals := binds ++ ("loop", loopV) :: fr.locals }
+        let binds ← bindTargetM pol rec.target x
+        let (ps, _) ← renderNodes env n
+          { inner with locals := binds ++ (if usesLoop then ("loop", loopV) :: fr.locals else fr.locals) }
           rec.body
         pure (ps :: acc)) []
-      pure chunks.reverse.flatten
+      pure (revFlatten chunks)
 
 /-- The items a loop iterates: those its `if` filter keeps, the filter seeing
 each item bound to the loop target. -/
@@ -869,5 +953,22 @@ def renderTemplate (env : Environment) : Nat → Frame → Option String → Lis
       pure (ps ++ pps, ctx')
 
 end
+
+/-- `renderNodes` as one fold over the nodes (the single-node case is a
+shortcut of it). -/
+theorem renderNodes_succ (env : Environment) (n : Nat) (fr : Frame) (nodes : List Node) :
+    renderNodes env (n + 1) fr nodes = (do
+      let (chunks, fr') ← nodes.foldlM (fun (st : List (List Piece) × Frame) (node : Node) => do
+        let (acc, fr) := st
+        let (ps, fr') ← renderNode env n fr node
+        pure (if fr.top && fr.parent.isSome then acc else ps :: acc, fr')) ([], fr)
+      pure (revFlatten chunks, fr')) := by
+  match nodes with
+  | [] => simp [renderNodes]
+  | [node] =>
+    simp only [renderNodes, List.foldlM, bind_assoc, pure_bind]
+    congr 1; funext r
+    split <;> simp [revFlatten]
+  | _ :: _ :: _ => simp [renderNodes]
 
 end LeanJinja2
