@@ -10,6 +10,8 @@ and `json.dumps(..., sort_keys=True)` with upstream's HTML-safe replacements
 
 namespace LeanJinja2
 
+set_option linter.unusedVariables false
+
 open LeanMarkupsafe
 
 /-- Round a decimal half-to-even to `p` fractional digits: the scaled integer. -/
