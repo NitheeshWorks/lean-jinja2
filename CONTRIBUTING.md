@@ -55,6 +55,27 @@ be a Hoare triple over a heap.
   upstream's sandboxed `safe_range` (`MAX_RANGE = 100000`). `lake exe bench`
   bounds the time at `10^4` and `10^5` nesting; complexity is tested, not
   stated in Lean.
+* **Two lexers, one proved equal to the other.** `RepoImpl/Lexer.lean` is
+  the specification: a state machine over `List Char`, which the round-trip
+  proofs are about. A list costs 24 bytes a character, so the compiler and
+  `parse` run `lexFast` (`RepoImpl/LexFast.lean`) instead: the same machine
+  over `String.Slice` positions (`RepoImpl/Cursor.lean`), template data and
+  string literals built straight into a `String`, tokens kept as kind and
+  length (`TokL`). Each of its helpers mirrors the specification helper of
+  the same name, and `lexFast_eq` proves
+  `lexFast cfg s = (lex cfg s).map (·.map Token.light)`; `parse_eq` restates
+  `parse` through `lex`. A helper that reads a bounded prefix matches on
+  `l.take k` in the specification, so its twin reads only `k` characters.
+  To add a lexer feature, change both and extend the step proofs in
+  `Proofs/LexFast.lean`.
+* **Constant stack.** Every loop over input or output is tail recursive.
+  The specification's non-tail `normalizeNewlines` and `unescapeStr` run
+  through proved `@[csimp]` replacements (`normalizeNewlines_eq_TR`,
+  `unescapeStr_eq_TR`), so even `lex` does not overflow on long data.
+  lean-markupsafe's `escape` works on a `List Char` (non-tail
+  `escapeList`); `RepoImpl/Escape.lean` replaces it, for the code this
+  package compiles, by the one-pass `escapeFast` (`escape_eq_fast`,
+  `@[csimp]`), so the proofs about `escape` stand as they are.
 * **`_ext` lemmas.** A decoder lemma holds on any continuation of the buffer and
   reports the final position, so field lemmas compose. Do not add a lemma that
   only holds at the end of a buffer; it is unusable one field later.
@@ -71,8 +92,11 @@ be a Hoare triple over a heap.
 Listed here with the reason, and in `docs/traceability.toml` with
 `status = "tested"`.
 
-* **Time bounds** (`tests/Bench.lean`): linear lexing, parsing and rendering
-  on deeply nested and long templates, and the `range` cap.
+* **Time and memory bounds** (`tests/Bench.lean`): linear lexing, parsing
+  and rendering on deeply nested and long templates, the `range` cap, and
+  10 MB / 20 MB of plain text, `{{ x }}` with a 20 MB value (plain and
+  autoescaped) and a 10 MB string literal within 2 s and 300 MB of peak
+  resident memory.
 * **`sort`, `unique`, `trim`, `wordcount`, `center`** are covered by property
   tests and by the upstream cases in `tests/Conformance.lean`. The properties
   are: a sorted permutation, first occurrences in order, no surrounding

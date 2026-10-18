@@ -452,7 +452,7 @@ theorem str_step (s : String) (kd : TagKind) (st : List Char) (rest : List Char)
   unfold stepTag
   cases kd <;> cases st <;>
     simp [hend.1, hend.2, hsp, floatAt_nondig hq, intAt_nondig hq, hname, hstr, htake, hinner, hnorm, hun,
-      emit, cut, hdrop, String.ofList_toList]
+      emit, cut, hdrop, String.ofList_toList, strValue, Except.map]
 
 /-! ## Operators -/
 

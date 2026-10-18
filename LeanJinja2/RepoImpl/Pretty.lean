@@ -1,7 +1,7 @@
 import LeanJinja2.DataTypes.Ast
 import LeanJinja2.DataTypes.Syntax
 import LeanJinja2.RepoImpl.Chars
-import LeanJinja2.RepoImpl.Lexer
+import LeanJinja2.RepoImpl.LexFast
 import LeanJinja2.RepoImpl.Parser
 
 /-!
@@ -231,10 +231,11 @@ end LeanJinja2
 namespace LeanJinja2
 
 /-- Parse template source: lex, keep the significant tokens, parse
-(upstream `Environment.parse`). -/
+(upstream `Environment.parse`). It lexes in place (`lexFast`); `parse_eq`
+states it through `lex`. -/
 def parse (cfg : LexConfig) (src : String) : Except ParseError (List Node) :=
-  match lex cfg src with
+  match lexFast cfg src with
   | .error e => .error ⟨e.msg, 0⟩
-  | .ok ts => parseTokens (significant ts)
+  | .ok ts => parseTokens (significantL ts)
 
 end LeanJinja2

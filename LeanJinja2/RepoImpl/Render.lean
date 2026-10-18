@@ -1,5 +1,5 @@
 import LeanJinja2.DataTypes.Environment
-import LeanJinja2.RepoImpl.Lexer
+import LeanJinja2.RepoImpl.LexFast
 import LeanJinja2.RepoImpl.Parser
 import LeanJinja2.RepoImpl.AstWalk
 import LeanJinja2.RepoImpl.Depth
@@ -163,9 +163,10 @@ def mergeOverrides (old : List (String × List BlockEntry)) (own : List (String 
 
 /-! ## Loading and compiling -/
 
-/-- Line number of a character offset. -/
+/-- Line number of a character offset: one plus the line breaks before it
+(counted in place, without a list of the source). -/
 def lineOf (src : String) (pos : Nat) : Nat :=
-  1 + ((src.toList.take pos).filter (· == '\n')).length
+  1 + Cursor.foldTake (fun n c => if c == '\n' then n + 1 else n) 0 src.toSlice.startPos pos
 
 /-- Upstream `split_template_path`: `/`-separated pieces, `..` rejected. -/
 def splitTemplatePath (name : String) : Option (List String) :=
@@ -202,19 +203,19 @@ def renderBudget (body : List Node) : Nat := 3 * nodesDepth body + 2
 syntax errors carry their line; unknown filters and duplicate blocks are
 `TemplateAssertionError`s. -/
 def Environment.compile (env : Environment) (src : String) : Except RenderError (List Node) :=
-  match lex env.toLexConfig src with
+  match lexFast env.toLexConfig src with
   | .error e => .error (.syntax e.msg (lineOf src e.pos))
   | .ok toks =>
-    let sig := significant toks
+    let sig := significantL toks
     match parseTokens sig with
     | .error e =>
       -- the offset of the significant token the parser stopped at
       let idx := sig.length - e.remaining
-      let rec posOf : List Token → Nat → Nat → Nat
+      let rec posOf : List TokL → Nat → Nat → Nat
         | [], _, p => p
         | t :: ts, k, p =>
-          if t.kind.ignored then posOf ts k (p + t.raw.length)
-          else if k == 0 then p else posOf ts (k - 1) (p + t.raw.length)
+          if t.kind.ignored then posOf ts k (p + t.len)
+          else if k == 0 then p else posOf ts (k - 1) (p + t.len)
       .error (.syntax e.msg (lineOf src (posOf toks idx 0)))
     | .ok body =>
       -- too deep for the depth budget: upstream's RecursionError, raised here

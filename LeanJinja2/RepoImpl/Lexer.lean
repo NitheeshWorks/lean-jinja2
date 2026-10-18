@@ -1,5 +1,6 @@
 import LeanJinja2.DataTypes.Syntax
 import LeanJinja2.RepoImpl.Chars
+import LeanJinja2.RepoImpl.Cursor
 
 /-!
 # The lexer
@@ -18,6 +19,11 @@ Whitespace control is decided here, as upstream does: `-` strips the adjacent
 whitespace, `lstrip_blocks` strips the indentation before a block or comment
 tag, `trim_blocks` removes the newline after a block tag. The removed
 characters become `ws` tokens rather than disappearing.
+
+This is the specification. The compiler runs `lexFast` (`LexFast.lean`), the
+same machine reading the source in place, proved equal to `lex`
+(`lexFast_eq`). The helpers that read a bounded prefix match on `l.take k`,
+which is what lets their in-place twins read only `k` characters.
 -/
 
 namespace LeanJinja2
@@ -58,8 +64,10 @@ namespace Lex
 /-- `p` is a prefix of `l`. -/
 def pre (p : String) (l : List Char) : Bool := p.toList.isPrefixOf l
 
-/-- Optional `-`/`+` whitespace-control sign after a start delimiter. -/
-def signAt : List Char → Option Char
+/-- Optional `-`/`+` whitespace-control sign after a start delimiter (it
+reads one character: the match is on `l.take 1`). -/
+def signAt (l : List Char) : Option Char :=
+  match l.take 1 with
   | '-' :: _ => some '-'
   | '+' :: _ => some '+'
   | _ => none
@@ -344,9 +352,158 @@ def unescapeStr : List Char → Except String (List Char)
 termination_by l => l.length
 decreasing_by all_goals simp_all <;> omega
 
-/-- The two-character operators, then the one-character ones. -/
+/-- A position no further from the end than `r`. -/
+abbrev PosLE {s : String.Slice} (r : s.Pos) := {r' : s.Pos // (Cursor.rest r').length ≤ (Cursor.rest r).length}
+
+def PosLE.self {s : String.Slice} (r : s.Pos) : PosLE r := ⟨r, Nat.le_refl _⟩
+
+def PosLE.adv {s : String.Slice} (r : s.Pos) (k : Nat) : PosLE r :=
+  ⟨Cursor.advN r k, by rw [Cursor.rest_advN, List.length_drop]; omega⟩
+
+/-- One escape `\c2...` with `r` after `c2`: the characters it stands for
+and where the rest starts (`unescapeStr`'s `'\\' :: c :: r` case). -/
+def escape1 {s : String.Slice} (c2 : Char) (r : s.Pos) : Except String (List Char × PosLE r) :=
+  match c2 with
+  | '\\' => .ok (['\\'], .self r) | '\'' => .ok (['\''], .self r) | '"' => .ok (['"'], .self r)
+  | 'a' => .ok (['\x07'], .self r) | 'b' => .ok (['\x08'], .self r) | 'f' => .ok (['\x0c'], .self r)
+  | 'n' => .ok (['\n'], .self r) | 'r' => .ok (['\r'], .self r) | 't' => .ok (['\t'], .self r)
+  | 'v' => .ok (['\x0b'], .self r)
+  | '\n' => .ok ([], .self r)
+  | 'x' => match hexN 2 (Cursor.takeL r 2) with
+    | some v => .ok ([Char.ofNat v], .adv r 2)
+    | none => .error "truncated \\xXX escape"
+  | 'u' => match hexN 4 (Cursor.takeL r 4) with
+    | some v => .ok ([Char.ofNat v], .adv r 4)
+    | none => .error "truncated \\uXXXX escape"
+  | 'U' => match hexN 8 (Cursor.takeL r 8) with
+    | some v => if v > 0x10FFFF then .error "illegal Unicode character" else .ok ([Char.ofNat v], .adv r 8)
+    | none => .error "truncated \\UXXXXXXXX escape"
+  | 'N' => .error "\\N{...} escapes are not supported"
+  | c2 =>
+    if '0' ≤ c2 ∧ c2 ≤ '7' then
+      let more := (Cursor.takeL r 2).takeWhile (fun d => '0' ≤ d ∧ d ≤ '7')
+      .ok ([Char.ofNat (digitsValue 8 (c2 :: more))], .adv r more.length)
+    else .ok (['\\', c2], .self r)
+
+/-- `unescapeStr` as it runs: over a string in place, the text built in a
+`String`, tail recursive. `unescapeStr_eq_TR` proves them equal. -/
+def unescF {s : String.Slice} (p : s.Pos) (acc : String) : Except String String :=
+  if h : p = s.endPos then .ok acc
+  else
+    let c := p.get h
+    let q := p.next h
+    if c == '\\' then
+      if h2 : q = s.endPos then .ok (acc.push '\\')
+      else
+        match escape1 (q.get h2) (q.next h2) with
+        | .error e => .error e
+        | .ok (out, r') => unescF r'.1 (out.foldl String.push acc)
+    else unescF q (acc.push c)
+termination_by (Cursor.rest p).length
+decreasing_by
+  · exact Nat.lt_of_le_of_lt r'.2
+      (Nat.lt_trans (Cursor.rest_next_length q h2) (Cursor.rest_next_length p h))
+  · exact Cursor.rest_next_length p h
+
+theorem hexN_take (k : Nat) (l : List Char) : hexN k (l.take k) = hexN k l := by
+  simp [hexN, List.take_take]
+
+theorem bind_cons (u : Except String (List Char)) (x : List Char) :
+    (do let t ← u; pure (x ++ t)) = u.map (x ++ ·) := by
+  cases u <;> rfl
+
+set_option linter.unusedSimpArgs false in
+/-- `escape1` computes `unescapeStr`'s escape step. -/
+theorem escape1_eq {s : String.Slice} (c2 : Char) (r : s.Pos) :
+    unescapeStr ('\\' :: c2 :: Cursor.rest r) =
+      (escape1 c2 r).bind (fun x => (unescapeStr (Cursor.rest x.2.1)).map (x.1 ++ ·)) := by
+  unfold escape1
+  split
+  all_goals simp only [unescapeStr.eq_2, unescapeStr.eq_3, unescapeStr.eq_4, unescapeStr.eq_5,
+    unescapeStr.eq_6, unescapeStr.eq_7, unescapeStr.eq_8, unescapeStr.eq_9, unescapeStr.eq_10,
+    unescapeStr.eq_11, unescapeStr.eq_12, unescapeStr.eq_13, unescapeStr.eq_14, unescapeStr.eq_15,
+    unescapeStr.eq_16, Cursor.takeL_eq, hexN_take, PosLE.self, PosLE.adv, Cursor.rest_advN]
+  case h_16 =>
+    rw [unescapeStr.eq_17 _ _ ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_› ‹_›]
+    split
+    · simp only [Except.bind, Cursor.takeL_eq, Cursor.rest_advN]
+      cases unescapeStr _ <;> rfl
+    · simp only [Except.bind]
+      cases unescapeStr _ <;> rfl
+  all_goals (try simp only [Except.bind, Cursor.rest_advN])
+  all_goals (try split)
+  all_goals (try simp only [Except.bind, Cursor.rest_advN])
+  all_goals (try split)
+  all_goals first
+    | with_reducible rfl
+    | (cases unescapeStr _ <;> rfl)
+    | (simp only [Cursor.rest_advN]; cases unescapeStr _ <;> rfl)
+
+theorem push_foldl (out : List Char) (acc : String) :
+    out.foldl String.push acc = acc ++ String.ofList out := by
+  induction out generalizing acc with
+  | nil => simp
+  | cons c cs ih =>
+    rw [List.foldl_cons, ih]
+    apply String.ext
+    simp [String.toList_push]
+
+theorem unescF_eq {s : String.Slice} (p : s.Pos) (acc : String) :
+    unescF p acc = (unescapeStr (Cursor.rest p)).map (fun t => acc ++ String.ofList t) := by
+  induction h : (Cursor.rest p).length using Nat.strongRecOn generalizing p acc with
+  | _ n ih =>
+  unfold unescF
+  by_cases hp : p = s.endPos
+  · subst hp; simp [Cursor.rest_endPos, unescapeStr, Except.map]
+  simp only [hp, ↓reduceDIte]
+  have hr := Cursor.rest_next p hp
+  by_cases hb : p.get hp = '\\'
+  · simp only [hb, beq_self_eq_true, ↓reduceIte]
+    rw [hb] at hr
+    by_cases hq : p.next hp = s.endPos
+    · simp only [hq, ↓reduceDIte]
+      rw [hr, hq, Cursor.rest_endPos, unescapeStr.eq_18 _ _ (fun _ _ _ h => by cases h),
+        unescapeStr.eq_1]
+      simp only [Except.map, bind, Except.bind, pure, Except.pure, Except.ok.injEq]
+      apply String.ext; simp [String.toList_push]
+    · simp only [hq, ↓reduceDIte]
+      rw [hr, Cursor.rest_next _ hq, escape1_eq]
+      cases he : escape1 ((p.next hp).get hq) ((p.next hp).next hq) with
+      | error e => rfl
+      | ok x =>
+        obtain ⟨out, r', hr'⟩ := x
+        simp only [Except.bind]
+        have hlt : (Cursor.rest r').length < n := by
+          rw [← h, hr, Cursor.rest_next _ hq]; simp at hr' ⊢; omega
+        rw [ih _ hlt r' _ rfl, push_foldl]
+        cases unescapeStr (Cursor.rest r') with
+        | error e => rfl
+        | ok t =>
+          simp only [Except.map, Except.ok.injEq]
+          apply String.ext; simp
+  · have hne : (p.get hp == '\\') = false := by simpa using hb
+    simp only [hne, Bool.false_eq_true, ↓reduceIte]
+    have hlt : (Cursor.rest (p.next hp)).length < n := by rw [← h, hr]; simp
+    rw [hr, unescapeStr.eq_18 _ _ (fun _ _ h _ => hb h), ih _ hlt _ _ rfl]
+    cases unescapeStr (Cursor.rest (p.next hp)) with
+    | error e => rfl
+    | ok t =>
+      simp only [Except.map, bind, Except.bind, pure, Except.pure, Except.ok.injEq]
+      apply String.ext; simp [String.toList_push]
+
+/-- `unescapeStr` as it runs (`unescF` over the text, in place). -/
+def unescapeStrTR (l : List Char) : Except String (List Char) :=
+  (unescF (String.ofList l).toSlice.startPos "").map String.toList
+
+@[csimp] theorem unescapeStr_eq_TR : @unescapeStr = @unescapeStrTR := by
+  funext l
+  rw [unescapeStrTR, unescF_eq, Cursor.rest_startPos, String.copy_toSlice, String.toList_ofList]
+  cases unescapeStr l <;> simp [Except.map]
+
+/-- The two-character operators, then the one-character ones (it reads two
+characters: the match is on `l.take 2`). -/
 def opAt (l : List Char) : Option (Nat × Op) :=
-  match l with
+  match l.take 2 with
   | '/' :: '/' :: _ => some (2, .floordiv)
   | '*' :: '*' :: _ => some (2, .pow)
   | '=' :: '=' :: _ => some (2, .eq)
@@ -387,6 +544,12 @@ def emit (f : List Char → List Token × List Char) (m : LexMode) (l : List Cha
 
 /-- Whether the characters end with a line break. -/
 def endsNewline (l : List Char) : Bool := (l.getLast?.map isNewline).getD false
+
+/-- The value of the string literal of `n` characters at the head of `l`:
+its content with newlines normalised and escapes resolved. -/
+def strValue (cfg : LexConfig) (l : List Char) (n : Nat) : Except String String :=
+  (unescapeStr (normalizeNewlines cfg.newlineSequence.toList ((l.take n).drop 1 |>.dropLast))).map
+    String.ofList
 
 /-- The kind of a bracket closer, or none. -/
 def closerOf : Op → Option Char
@@ -459,11 +622,10 @@ def stepTag (cfg : LexConfig) (k : TagKind) (stack : List Char) (afterDot : Bool
     else
     match stringAt l with
     | some n =>
-      let inner := normalizeNewlines cfg.newlineSequence.toList ((l.take n).drop 1 |>.dropLast)
-      match unescapeStr inner with
+      match strValue cfg l n with
       | .error e => .error ⟨e, pos⟩
       | .ok v =>
-        emit (cut (.str (String.ofList v)) n) (.tag k stack false) l
+        emit (cut (.str v) n) (.tag k stack false) l
     | none =>
     match opAt l with
     | some (n, o) =>
@@ -504,10 +666,11 @@ def loop (cfg : LexConfig) : Nat → LexMode → List Char → Nat → List Toke
     | .ok (ts, m', r) => loop cfg fuel m' r (pos + consumed ts) (ts.reverse ++ acc)
 
 /-- The trailing newline upstream strips from the source (unless
-`keep_trailing_newline`): its length. -/
+`keep_trailing_newline`): its length. It reads the last two characters (the
+match is on `l.reverse.take 2`). -/
 def trailingNewlineLen (cfg : LexConfig) (l : List Char) : Nat :=
   if cfg.keepTrailingNewline then 0
-  else match l.reverse with
+  else match l.reverse.take 2 with
     | '\n' :: '\r' :: _ => 2
     | '\n' :: _ => 1
     | '\r' :: _ => 1

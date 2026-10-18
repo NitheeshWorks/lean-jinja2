@@ -1,4 +1,5 @@
 import LeanJinja2.Proofs.Lexer
+import LeanJinja2.Proofs.LexFast
 import LeanJinja2.Proofs.Roundtrip
 import LeanJinja2.Proofs.Render
 import LeanJinja2.Proofs.Semantics
@@ -23,16 +24,20 @@ namespace LeanJinja2
 
 set_option linter.unusedSimpArgs false
 
-/-- Lexing and parsing (`RepoImpl/Lexer.lean`, `RepoImpl/Parser.lean`, `RepoImpl/Pretty.lean`). -/
+/-- Lexing and parsing (`RepoImpl/Lexer.lean`, `RepoImpl/LexFast.lean`, `RepoImpl/Parser.lean`,
+`RepoImpl/Pretty.lean`). -/
 structure VerifiedSyntax where
   /-- `lex_print_roundtrip`. -/
   lexPrintRoundtrip : Spec.lexPrintRoundtrip
   /-- `parse_pretty_roundtrip`. -/
   parsePrettyRoundtrip : Spec.parsePrettyRoundtrip
+  /-- `lexFast_eq`: the compiler's in-place lexer is `lex`. -/
+  lexFastEq : Spec.lexFastEq
 
 theorem theVerifiedSyntax : VerifiedSyntax where
   lexPrintRoundtrip := lex_print_roundtrip
   parsePrettyRoundtrip := parse_pretty_roundtrip
+  lexFastEq := lexFast_eq
 
 /-- Rendering and autoescaping (`RepoImpl/Render.lean`, `RepoImpl/Template.lean`). -/
 structure VerifiedRender where

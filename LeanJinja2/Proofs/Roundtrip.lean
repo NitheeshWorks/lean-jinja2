@@ -1,4 +1,5 @@
 import LeanJinja2.Proofs.Roundtrip.Template
+import LeanJinja2.Proofs.LexFast
 
 /-!
 # `parse_pretty_roundtrip`
@@ -68,6 +69,7 @@ theorem lex_pretty (t : List Node) (h : WellFormed t) :
 canonical print back to the same template. -/
 theorem parse_pretty_roundtrip (t : List Node) (h : WellFormed t) : parse {} (pretty t) = .ok t := by
   obtain ⟨ts, hl, hs⟩ := lex_pretty t h
-  simp [parse, hl, hs, parseTokens_pretty t h]
+  rw [parse_eq]
+  simp [hl, hs, parseTokens_pretty t h]
 
 end LeanJinja2

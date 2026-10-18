@@ -216,3 +216,13 @@ realises = ["LeanJinja2.Lex.loop", "LeanJinja2.renderNodes", "LeanJinja2.loopVal
 theorem = ["LeanJinja2.loopValues_eq", "LeanJinja2.lex_print_roundtrip"]
 test = ["tests/Bench.lean"]
 note = "Complexity is not stated in Lean; lake exe bench bounds the time at 10^4 and 10^5 nesting (if, for, unclosed if, parentheses, sibling tags) and for range."
+
+[[requirement]]
+id = "safety.large-input"
+upstream = "src/jinja2/lexer.py (Lexer.tokeniter, _normalize_newlines), src/jinja2/environment.py (Environment.compile)"
+title = "Large templates and values render in linear time, constant stack and memory a small multiple of the input"
+status = "tested"
+realises = ["LeanJinja2.lexFast", "LeanJinja2.LexF.loop", "LeanJinja2.LexF.cutData", "LeanJinja2.LexF.strValue", "LeanJinja2.Lex.unescF", "LeanJinja2.normalizeNewlinesTR", "LeanJinja2.escapeFast", "LeanJinja2.Environment.compile", "LeanJinja2.parse"]
+theorem = ["LeanJinja2.lexFast_eq", "LeanJinja2.parse_eq", "LeanJinja2.normalizeNewlines_eq_TR", "LeanJinja2.Lex.unescapeStr_eq_TR", "LeanJinja2.escape_eq_fast"]
+test = ["tests/Bench.lean"]
+note = "The compiler lexes in place over the source (String.Slice positions, data built into a String) and lexFast_eq proves it equal to the List Char specification lexer. Time, stack and memory are not stated in Lean; lake exe bench bounds 10 MB and 20 MB of plain text, {{ x }} with a 20 MB string (plain and autoescaped; escape runs escapeFast through the proved @[csimp] escape_eq_fast) and a 10 MB string literal at 2 s and 300 MB peak resident memory."

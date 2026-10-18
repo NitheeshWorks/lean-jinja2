@@ -54,6 +54,7 @@ All of these are machine-checked. `Proofs/Verified.lean` bundles them into
 |---|---|
 | `lex_print_roundtrip` | `lex cfg s = .ok ts → Token.print ts = s`: lexing loses nothing, for every configuration |
 | `parse_pretty_roundtrip` | `WellFormed t → parse {} (pretty t) = .ok t`: the canonical print parses back to the same tree |
+| `lexFast_eq` | `lexFast cfg s = (lex cfg s).map (·.map Token.light)`: the in-place lexer the compiler runs (linear, constant stack, a few bytes a character) gives exactly `lex`'s tokens |
 | `autoescape_sound` | with autoescaping on throughout, `t.render vars = .ok out` implies `out` is the trace's literal text with every interpolated value escaped (markup unchanged) |
 | `autoescape_escaped` | each such escaped value satisfies lean-markupsafe's `IsEscaped` |
 | `render_literals` | every literal piece of the output is text from the template or one its loader holds |
@@ -71,7 +72,8 @@ The refined entry points carry these results in their types:
 output comes with the `autoescape_sound` statement.
 
 Tested rather than proved: the `sort`, `unique`, `trim`, `wordcount` and
-`center` filters, and the time bounds on hostile templates (`lake exe bench`).
+`center` filters, and the time and memory bounds on hostile and large
+templates (`lake exe bench`).
 See [CONTRIBUTING.md](CONTRIBUTING.md#tested-not-proved).
 
 ## What "verified" means here
@@ -91,7 +93,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md#tested-not-proved).
 lake build            # library, proofs, and both test executables
 lake exe props        # property tests (seeded; `lake exe props 42`)
 lake exe conformance  # cases re-expressed from the upstream test suite
-lake exe bench        # time bounds on hostile templates
+lake exe bench        # time and memory bounds on hostile and large templates
 scripts/check.sh      # the whole CI gate, locally
 ```
 

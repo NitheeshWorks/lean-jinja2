@@ -154,6 +154,12 @@ def lexPrintRoundtrip : Prop :=
 canonical print back to the same template. -/
 def parsePrettyRoundtrip : Prop := ∀ t : List Node, WellFormed t → parse {} (pretty t) = .ok t
 
+/-- `lexFast_eq`: the lexer the compiler runs (in place over the source) is
+the specification lexer `lex`, seen through `Token.light`: the same tokens'
+kinds and lengths, or the same error. -/
+def lexFastEq : Prop :=
+  ∀ (cfg : LexConfig) (s : String), lexFast cfg s = (lex cfg s).map (·.map Token.light)
+
 end Spec
 
 end LeanJinja2

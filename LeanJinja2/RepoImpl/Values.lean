@@ -1,4 +1,5 @@
 import LeanJinja2.DataTypes.Value
+import LeanJinja2.RepoImpl.Escape
 import LeanJinja2.RepoImpl.Chars
 
 /-!
