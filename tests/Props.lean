@@ -155,6 +155,39 @@ def uniqueProp : Property where
     | .ok (some ys) => if ys == expected then (none, r) else (some s!"{xs} -> {ys}", r)
     | _ => (some s!"failed on {xs}", r)
 
+/-- An optional slice bound in `-15 .. 15`. -/
+def genBound (r : Rng) : Option Int × Rng :=
+  let (k, r) := r.nat 32
+  (if k == 31 then none else some ((k : Int) - 15), r)
+
+/-- The slice as indexes into the list (the definition before the one-pass
+`sliceV`). -/
+def sliceRef (xs : List Value) (a b c : Option Int) : Option (List Value) :=
+  match sliceIndices xs.length a b c with
+  | .ok is => some (is.filterMap (fun i => xs[i]?))
+  | .error _ => none
+
+def sliceProp : Property where
+  name := "one-pass slicing of lists and strings equals indexing the indices"
+  check r :=
+    let (xs, r) := genInts r
+    let (a, r) := genBound r
+    let (b, r) := genBound r
+    let (c, r) := genBound r
+    let c := if c == some 0 then some 1 else c
+    let opt := fun (o : Option Int) => o.map Value.int
+    let vs := xs.map Value.int
+    let str := String.ofList (xs.map (fun i => Char.ofNat (97 + (i.toNat % 26))))
+    let gotL := sliceV .default (.list vs) (opt a) (opt b) (opt c)
+    let gotS := sliceV .default (.str str) (opt a) (opt b) (opt c)
+    let refS := (sliceRef (str.toList.map (fun ch => Value.str (String.singleton ch))) a b c).map
+      (fun l => String.join (l.map Value.toStr))
+    match gotL, sliceRef vs a b c, gotS, refS with
+    | .ok (.list ys), some zs, .ok (.str t), some u =>
+      if ys.map Value.repr == zs.map Value.repr && t == u then (none, r)
+      else (some s!"{xs}[{a}:{b}:{c}]", r)
+    | _, _, _, _ => (some s!"failed on {xs}[{a}:{b}:{c}]", r)
+
 def genSpacey (r : Rng) : String × Rng := Id.run do
   let (n, r) := r.nat 10
   let mut r := r
@@ -202,7 +235,8 @@ def centerProp : Property where
       then (none, r) else (some s!"{repr s} width {w} -> {repr t}", r)
     | _ => (some s!"failed on {repr s}", r)
 
-def properties : List Property := [renderTotal, printParse, sortProp, uniqueProp, trimProp, wordcountProp, centerProp]
+def properties : List Property := [renderTotal, printParse, sortProp, uniqueProp, sliceProp, trimProp, wordcountProp,
+  centerProp]
 
 def main (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 88172645463325252

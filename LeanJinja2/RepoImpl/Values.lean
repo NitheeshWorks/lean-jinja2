@@ -1,5 +1,4 @@
 import LeanJinja2.DataTypes.Value
-import LeanJinja2.RepoImpl.Escape
 import LeanJinja2.RepoImpl.Chars
 
 /-!
@@ -254,6 +253,84 @@ def Value.reprPairs : List (Value × Value) → String
   | [(k, v)] => k.repr ++ ": " ++ v.repr
   | (k, v) :: kvs => k.repr ++ ": " ++ v.repr ++ ", " ++ Value.reprPairs kvs
 end
+
+/-! `repr` in one pass. `Value.reprList` appends each item's text to the text
+of the rest, which copies the rest once per item (quadratic on a long list).
+The `Acc` versions append to an accumulator instead, and `repr_eq_acc` (a
+`@[csimp]` lemma) makes compiled code use them. -/
+
+mutual
+def Value.reprAcc (acc : String) : Value → String
+  | .list xs => Value.reprListAcc (acc ++ "[") xs ++ "]"
+  | .tuple [x] => Value.reprAcc (acc ++ "(") x ++ ",)"
+  | .tuple xs => Value.reprListAcc (acc ++ "(") xs ++ ")"
+  | .dict kvs => Value.reprPairsAcc (acc ++ "{") kvs ++ "}"
+  | v => acc ++ v.repr
+
+def Value.reprListAcc (acc : String) : List Value → String
+  | [] => acc
+  | [x] => Value.reprAcc acc x
+  | x :: xs => Value.reprListAcc (Value.reprAcc acc x ++ ", ") xs
+
+def Value.reprPairsAcc (acc : String) : List (Value × Value) → String
+  | [] => acc
+  | [(k, v)] => Value.reprAcc (Value.reprAcc acc k ++ ": ") v
+  | (k, v) :: kvs => Value.reprPairsAcc (Value.reprAcc (Value.reprAcc acc k ++ ": ") v ++ ", ") kvs
+end
+
+mutual
+theorem Value.reprAcc_eq : ∀ (acc : String) (v : Value), Value.reprAcc acc v = acc ++ v.repr
+  | acc, .list xs => by
+    rw [Value.reprAcc, Value.reprListAcc_eq]; simp [Value.repr, String.append_assoc]
+  | acc, .tuple [] => by simp [Value.reprAcc, Value.reprListAcc, Value.repr, Value.reprList, String.append_assoc]
+  | acc, .tuple [x] => by
+    rw [Value.reprAcc, Value.reprAcc_eq]; simp [Value.repr, String.append_assoc]
+  | acc, .tuple (x :: y :: ys) => by
+    rw [Value.reprAcc, Value.reprListAcc_eq]
+    · simp [Value.repr, String.append_assoc]
+    · intro z h; simp at h
+  | acc, .dict kvs => by
+    rw [Value.reprAcc, Value.reprPairsAcc_eq]; simp [Value.repr, String.append_assoc]
+  | acc, .none => by simp [Value.reprAcc]
+  | acc, .undef _ => by simp [Value.reprAcc]
+  | acc, .bool _ => by simp [Value.reprAcc]
+  | acc, .int _ => by simp [Value.reprAcc]
+  | acc, .float .. => by simp [Value.reprAcc]
+  | acc, .str _ => by simp [Value.reprAcc]
+  | acc, .markup _ => by simp [Value.reprAcc]
+  | acc, .macro .. => by simp [Value.reprAcc]
+  | acc, .native _ => by simp [Value.reprAcc]
+  | acc, .method .. => by simp [Value.reprAcc]
+  | acc, .loop .. => by simp [Value.reprAcc]
+  | acc, .superRef .. => by simp [Value.reprAcc]
+  | acc, .ns _ => by simp [Value.reprAcc]
+  | acc, .module .. => by simp [Value.reprAcc]
+
+theorem Value.reprListAcc_eq : ∀ (acc : String) (xs : List Value),
+    Value.reprListAcc acc xs = acc ++ Value.reprList xs
+  | acc, [] => by simp [Value.reprListAcc, Value.reprList]
+  | acc, [x] => by rw [Value.reprListAcc, Value.reprAcc_eq]; simp [Value.reprList]
+  | acc, x :: y :: ys => by
+    rw [Value.reprListAcc, Value.reprListAcc_eq, Value.reprAcc_eq]
+    · simp [Value.reprList, String.append_assoc]
+    · simp_all
+
+theorem Value.reprPairsAcc_eq : ∀ (acc : String) (kvs : List (Value × Value)),
+    Value.reprPairsAcc acc kvs = acc ++ Value.reprPairs kvs
+  | acc, [] => by simp [Value.reprPairsAcc, Value.reprPairs]
+  | acc, [(k, v)] => by
+    rw [Value.reprPairsAcc, Value.reprAcc_eq, Value.reprAcc_eq]; simp [Value.reprPairs, String.append_assoc]
+  | acc, (k, v) :: q :: kvs => by
+    rw [Value.reprPairsAcc, Value.reprPairsAcc_eq, Value.reprAcc_eq, Value.reprAcc_eq]
+    · simp [Value.reprPairs, String.append_assoc]
+    · simp_all
+end
+
+/-- `repr` through the accumulator. -/
+def Value.reprFast (v : Value) : String := Value.reprAcc "" v
+
+@[csimp] theorem repr_eq_acc : @Value.repr = @Value.reprFast := by
+  funext v; rw [Value.reprFast, Value.reprAcc_eq]; simp
 
 /-- Python `str()` of a defined value (undefined values are handled by the
 policy, see `Render`). -/

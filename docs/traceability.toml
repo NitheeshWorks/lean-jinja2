@@ -244,7 +244,17 @@ id = "safety.large-input"
 upstream = "src/jinja2/lexer.py (Lexer.tokeniter, _normalize_newlines), src/jinja2/environment.py (Environment.compile)"
 title = "Large templates and values render in linear time, constant stack and memory a small multiple of the input"
 status = "tested"
-realises = ["LeanJinja2.lexFast", "LeanJinja2.LexF.loop", "LeanJinja2.LexF.cutData", "LeanJinja2.LexF.strValue", "LeanJinja2.Lex.unescF", "LeanJinja2.normalizeNewlinesTR", "LeanJinja2.escapeFast", "LeanJinja2.Environment.compile", "LeanJinja2.parse"]
-theorem = ["LeanJinja2.lexFast_eq", "LeanJinja2.parse_eq", "LeanJinja2.normalizeNewlines_eq_TR", "LeanJinja2.Lex.unescapeStr_eq_TR", "LeanJinja2.escape_eq_fast"]
+realises = ["LeanJinja2.lexFast", "LeanJinja2.LexF.loop", "LeanJinja2.LexF.cutData", "LeanJinja2.LexF.strValue", "LeanJinja2.Lex.unescF", "LeanJinja2.normalizeNewlinesTR", "LeanMarkupsafe.escapeFast", "LeanJinja2.Environment.compile", "LeanJinja2.parse"]
+theorem = ["LeanJinja2.lexFast_eq", "LeanJinja2.parse_eq", "LeanJinja2.normalizeNewlines_eq_TR", "LeanJinja2.Lex.unescapeStr_eq_TR", "LeanMarkupsafe.escape_eq_fast"]
 test = ["tests/Bench.lean"]
-note = "The compiler lexes in place over the source (String.Slice positions, data built into a String) and lexFast_eq proves it equal to the List Char specification lexer. Time, stack and memory are not stated in Lean; lake exe bench bounds 10 MB and 20 MB of plain text, {{ x }} with a 20 MB string (plain and autoescaped; escape runs escapeFast through the proved @[csimp] escape_eq_fast) and a 10 MB string literal at 2 s and 300 MB peak resident memory."
+note = "The compiler lexes in place over the source (String.Slice positions, data built into a String) and lexFast_eq proves it equal to the List Char specification lexer. Time, stack and memory are not stated in Lean; lake exe bench bounds 10 MB and 20 MB of plain text, {{ x }} with a 20 MB string (plain and autoescaped; escape runs lean-markupsafe's escapeFast through its proved @[csimp] escape_eq_fast) and a 10 MB string literal at 2 s and 300 MB peak resident memory."
+
+[[requirement]]
+id = "safety.value-ops"
+upstream = "src/jinja2/filters.py"
+title = "Slicing, unique, repr of containers, the slice filter and string indexing run in one pass"
+status = "tested"
+realises = ["LeanJinja2.sliceV", "LeanJinja2.slicePick", "LeanJinja2.uniqueFast", "LeanJinja2.Value.reprAcc", "LeanJinja2.strIndex"]
+theorem = ["LeanJinja2.unique_eq_fast", "LeanJinja2.repr_eq_acc", "LeanJinja2.bkey_of_pyEq"]
+test = ["tests/Bench.lean", "tests/Props.lean", "tests/Conformance.lean"]
+note = "unique_eq_fast and repr_eq_acc are @[csimp] equalities with the list-based definitions. The array-based sliceV is checked against indexing the slice indices by a property (sliceProp). Time is not stated in Lean: lake exe bench bounds x[1:], x[::-1] and x[::2] on 10^6 items and a 10 MB string at 500 ms, unique of 10^5 ints at 200 ms, {{ x }} and pprint of 10^6 ints at 1 s, slice(10^5) at 500 ms and 10^4 string indexes at 1 s. Indexing x[i] into a list or string is O(i) (a list, UTF-8 text), so a template loop that indexes every position of a large value is quadratic, where Python is linear."

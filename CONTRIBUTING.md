@@ -80,10 +80,17 @@ be a Hoare triple over a heap.
   The specification's non-tail `normalizeNewlines` and `unescapeStr` run
   through proved `@[csimp]` replacements (`normalizeNewlines_eq_TR`,
   `unescapeStr_eq_TR`), so even `lex` does not overflow on long data.
-  lean-markupsafe's `escape` works on a `List Char` (non-tail
-  `escapeList`); `RepoImpl/Escape.lean` replaces it, for the code this
-  package compiles, by the one-pass `escapeFast` (`escape_eq_fast`,
-  `@[csimp]`), so the proofs about `escape` stand as they are.
+  lean-markupsafe's `escape` and the other `Markup` operations run in place
+  through its own proved `@[csimp]` replacements (`escape_eq_fast` and the
+  rest of its `VerifiedExecution`), so the proofs about `escape` stand as they
+  are.
+* **Value operations in one pass.** Slicing copies through an array
+  (`slicePick`), `unique` buckets the seen keys by a hash key that
+  Python-equal values share (`uniqueFast`, `bkey_of_pyEq`), and `repr`
+  appends to one accumulator (`Value.reprAcc`); `unique_eq_fast` and
+  `repr_eq_acc` are `@[csimp]` equalities with the list-based definitions,
+  and `sliceProp` checks slicing against indexing. Indexing `x[i]` stays
+  O(i): values are lists and UTF-8 strings.
 * **`_ext` lemmas.** A decoder lemma holds on any continuation of the buffer and
   reports the final position, so field lemmas compose. Do not add a lemma that
   only holds at the end of a buffer; it is unusable one field later.

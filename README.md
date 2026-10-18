@@ -103,8 +103,9 @@ Toolchain: `leanprover/lean4:v4.35.0` (pinned in `lean-toolchain`; `elan` instal
 
 Core slice complete: lexer, parser, renderer, 52 builtin filters, the
 builtin tests, inheritance, macros, and the dictionary and file system
-loaders. `tests/Conformance.lean` re-expresses 433 cases from the upstream
-suite and all of them pass. `tests/Props.lean` holds 7 seeded properties.
+loaders, import and from-import, line statements and line comments.
+`tests/Conformance.lean` re-expresses 512 cases from the upstream suite and
+all of them pass. `tests/Props.lean` holds 8 seeded properties.
 
 ## License
 

@@ -1,4 +1,5 @@
 import LeanJinja2.RepoImpl.Format
+import LeanJinja2.RepoImpl.Unique
 
 /-!
 # Builtin filters and tests
@@ -874,20 +875,22 @@ def Filters.slice (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (St
   let k := n.toNat
   let per := len / k
   let extra := len % k
-  let rec build : Nat → Nat → Nat → List Value
-    | 0, _, _ => []
-    | fuel + 1, i, off =>
-      if i ≥ k then [] else
+  -- the slices are consecutive, so each takes its items off the rest (a
+  -- `drop` from the start per slice would be quadratic in the slice count)
+  let rec build : Nat → Nat → Nat → List Value → List Value → List Value
+    | 0, _, _, _, acc => acc.reverse
+    | fuel + 1, i, off, rest, acc =>
+      if i ≥ k then acc.reverse else
       let start := off + i * per
       let off' := if i < extra then off + 1 else off
       let stop := off' + (i + 1) * per
-      let tmp := (seq.drop start).take (stop - start)
+      let tmp := rest.take (stop - start)
       let tmp := match fill with
         | some f => if i ≥ extra && (match f with | .none => false | _ => true)
             then tmp ++ [f] else tmp
         | none => tmp
-      .list tmp :: build fuel (i + 1) off'
-  pure (.list (build (k + 1) 0 0))
+      build fuel (i + 1) off' (rest.drop (stop - start)) (.list tmp :: acc)
+  pure (.list (build (k + 1) 0 0 seq []))
 
 /-- Upstream filter `sort`. -/
 def Filters.sort (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (String × Value)) :
@@ -1006,10 +1009,9 @@ def Filters.unique (fc : FCtx) (v : Value) (args : List Value) (kwargs : List (S
   let cs := ((a 0 "case_sensitive").map Value.truthy).getD false
   let attr := (a 1 "attribute").getD .none
   let xs ← iter v
-  let (_, out) ← xs.foldlM (fun (st : List Value × List Value) x => do
+  let out ← uniqueSpec (fun x => do
     let k ← attrGet fc attr none x
-    let k := if cs then k else ignoreCase k
-    if st.1.any (fun s => Value.pyEq s k) then pure st else pure (k :: st.1, st.2 ++ [x])) ([], [])
+    pure (if cs then k else ignoreCase k)) xs
   pure (.list out)
 
 /-- Upstream filter `urlencode`. -/

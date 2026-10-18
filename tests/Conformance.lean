@@ -1010,8 +1010,35 @@ def lineCases : List Case := [
     (env := { lineStatementPrefix := some "%%", lstripBlocks := true })
 ]
 
+/-! ## Value operations at size
+
+The one-pass slicing, `unique`, `repr`, `slice` filter and string indexing
+(see `tests/Bench.lean`), on the edge cases; goldens from jinja2 3.1.6. -/
+
+def valueOpCases : List Case := [
+  renders (F ++ "test_groupby[real]")
+    "{% for k, l in x|groupby('real') %}{{ k }}:{{ l }};{% endfor %}" "1:[1, 1];2:[2];3:[3, 3.0];"
+    [("x", .list [3, 1, 2, 1, .float 30 1])],
+  renders (F ++ "test_unique[number-attributes]")
+    "{{ (5).real }} {{ (5).imag }} {{ (5).numerator }} {{ (5).denominator }} {{ true.real }} {{ (2.5).real }} {{ (2.5).imag }}"
+    "5 0 5 1 1 2.5 0.0",
+  renders (F ++ "test_unique[mixed]") "{{ [1, 1.0, true, 2, 'a', 'A', 'b', 2.5, 2.50, none, none]|unique|list }}"
+    "[1, 2, 'a', 'b', 2.5, None]",
+  renders (F ++ "test_unique_case_sensitive[list]") "{{ ['a', 'A', 'b']|unique(case_sensitive=true)|list }}"
+    "['a', 'A', 'b']",
+  renders (F ++ "test_slice[subscript]")
+    "{{ 'héllo wörld'[::-1] }}|{{ 'abcdef'[1:-1:2] }}|{{ [1,2,3,4,5][::-2] }}|{{ [1,2,3][5:] }}|{{ 'abc'[-10:2] }}|{{ (1,2,3)[::-1] }}"
+    "dlröw olléh|bd|[5, 3, 1]|[]|ab|(3, 2, 1)",
+  renders (F ++ "test_pprint[nested]")
+    "{{ [1, (2,), {'a': [none, 'x\\'y']}, 2.5, true] }}|{{ {'k': (1, 2)}|pprint }}|{{ ()|string }}"
+    "[1, (2,), {'a': [None, \"x'y\"]}, 2.5, True]|{'k': (1, 2)}|()",
+  renders (F ++ "test_slice[fill]") "{{ [1,2,3,4,5,6,7]|slice(3)|list }}|{{ [1,2,3,4,5,6,7]|slice(3, 0)|list }}"
+    "[[1, 2, 3], [4, 5], [6, 7]]|[[1, 2, 3], [4, 5, 0], [6, 7, 0]]",
+  renders (F ++ "test_slice[string-index]") "{{ 'héllo'[1] }}{{ 'héllo'[-1] }}{{ 'abc'[5] is undefined }}" "éoTrue"
+]
+
 def cases : List Case := filterCases ++ testCases ++ coreCases ++ lexCases ++ inheritanceCases ++ undefinedCases ++
-  loaderCases ++ importCases ++ macroCases ++ lineCases
+  loaderCases ++ importCases ++ macroCases ++ lineCases ++ valueOpCases
 
 def main : IO UInt32 := do
   let mut failures := 0

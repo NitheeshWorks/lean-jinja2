@@ -118,6 +118,13 @@ def indexList (xs : List Value) (i : Int) : Option Value :=
   let j := if i < 0 then i + n else i
   if j < 0 || j ≥ n then none else xs[j.toNat]?
 
+/-- Python `s[i]` on a string: the character as a string, without a value
+per character (`indexList (charValues s) i`). -/
+def strIndex (s : String) (i : Int) : Option String :=
+  let n : Int := s.length
+  let j := if i < 0 then i + n else i
+  if j < 0 || j ≥ n then none else (s.drop j.toNat).front?.map String.singleton
+
 /-- Loop attributes (upstream `LoopContext`). -/
 def loopAttr (index0 length depth0 : Nat) (prev next : Option Value) (recur : Option LoopRec)
     (cell : Nat) (a : String) : Option Value :=
@@ -137,6 +144,13 @@ def loopAttr (index0 length depth0 : Nat) (prev next : Option Value) (recur : Op
   | "changed" => some (.method (.loop index0 length depth0 prev next recur cell) "changed")
   | _ => none
 
+/-- The number attributes of Python's `int`. -/
+def intAttr (n : Int) : String → Option Value
+  | "real" | "numerator" => some (.int n)
+  | "imag" => some (.int 0)
+  | "denominator" => some (.int 1)
+  | _ => none
+
 /-- Python attribute lookup only (no item fallback); `none` if missing. -/
 def pyAttr (heap : Heap) (v : Value) (a : String) : Option Value :=
   match v with
@@ -144,6 +158,14 @@ def pyAttr (heap : Heap) (v : Value) (a : String) : Option Value :=
   | .str _ | .markup _ => if strMethods.contains a then some (.method v a) else none
   | .list _ => if listMethods.contains a then some (.method v a) else none
   | .tuple _ => if a == "index" || a == "count" then some (.method v a) else none
+  -- the number attributes of Python's `int` (and `bool`) and `float`
+  | .int n => intAttr n a
+  | .bool b => intAttr (if b then 1 else 0) a
+  | .float .. =>
+    match a with
+    | "real" => some v
+    | "imag" => some (.float 0 1)
+    | _ => none
   | .loop i len d p nx r c => loopAttr i len d p nx r c a
   | .ns addr => ((heap[addr]?).getD []).lookup a
   | .macro n ps body uc .. =>
@@ -164,9 +186,8 @@ def pyItem (heap : Heap) (v : Value) (k : Value) : Option Value :=
   | .list xs, .int i => indexList xs i
   | .list xs, .bool b => indexList xs (if b then 1 else 0)
   | .tuple xs, .int i => indexList xs i
-  | .str s, .int i => (indexList (charValues s) i)
-  | .markup m, .int i => (indexList (charValues m.str) i).map
-      (fun c => match c with | .str t => .markup (Markup.markSafe t) | x => x)
+  | .str s, .int i => (strIndex s i).map Value.str
+  | .markup m, .int i => (strIndex m.str i).map (fun t => .markup (Markup.markSafe t))
   | .ns addr, .str a => ((heap[addr]?).getD []).lookup a
   | _, _ => none
 
@@ -203,7 +224,7 @@ def getitemV (pol : UndefinedPolicy) (heap : Heap) (v : Value) (k : Value) :
       | _ => .ok (.undef (.hint s!"{v.objectTypeRepr} has no element {k.repr}"))
 
 /-- Python slice bounds for a sequence of length `n`. -/
-def sliceIndices (n : Nat) (start stop step : Option Int) : Except ValueError (List Nat) :=
+def sliceRange (n : Nat) (start stop step : Option Int) : Except ValueError (Int × Int × Nat) :=
   let st := step.getD 1
   if st == 0 then .error (.typeError "slice step cannot be zero") else
   let n' : Int := n
@@ -213,12 +234,28 @@ def sliceIndices (n : Nat) (start stop step : Option Int) : Except ValueError (L
     let a := clamp 0 n' (norm (start.getD 0))
     let b := clamp 0 n' (norm (stop.getD n'))
     let count := if b > a then ((b - a + st - 1) / st).toNat else 0
-    .ok ((List.range count).map (fun (k : Nat) => (a + (k : Int) * st).toNat))
+    .ok (a, st, count)
   else
     let a := clamp (-1) (n' - 1) (norm (start.getD (n' - 1)))
     let b := clamp (-1) (n' - 1) (match stop with | some x => norm x | none => -1)
     let count := if a > b then ((a - b + (-st) - 1) / (-st)).toNat else 0
-    .ok ((List.range count).map (fun (k : Nat) => (a + (k : Int) * st).toNat))
+    .ok (a, st, count)
+
+/-- The indices of a slice: `count` of them from `a` in steps of `st`. -/
+def sliceIndices (n : Nat) (start stop step : Option Int) : Except ValueError (List Nat) := do
+  let (a, st, count) ← sliceRange n start stop step
+  pure ((List.range count).map (fun (k : Nat) => (a + (k : Int) * st).toNat))
+
+/-- Fold over the indices `a, a + st, ...` (`count` of them), without a list
+of them. -/
+def idxFold {β : Type} (f : β → Nat → β) (a st : Int) : Nat → β → β
+  | 0, b => b
+  | k + 1, b => idxFold f (a + st) st k (f b a.toNat)
+
+/-- The items of `arr` at a slice's indices, in one pass. -/
+def slicePick {α : Type} (arr : Array α) (a st : Int) (count : Nat) : Array α :=
+  idxFold (fun acc i => match arr[i]? with | some x => acc.push x | none => acc) a st count
+    (Array.mkEmpty count)
 
 /-- An optional slice bound as an integer. -/
 def sliceBound : Option Value → Except ValueError (Option Int)
@@ -234,15 +271,20 @@ def sliceV (pol : UndefinedPolicy) (v : Value) (start stop step : Option Value) 
   let a ← sliceBound start
   let b ← sliceBound stop
   let c ← sliceBound step
+  -- one pass over an array of the items (a list indexed per item is quadratic)
   let pick := fun (xs : List Value) => do
-    let is ← sliceIndices xs.length a b c
-    pure (is.filterMap (fun i => xs[i]?))
+    let arr := xs.toArray
+    let (i, st, count) ← sliceRange arr.size a b c
+    pure (slicePick arr i st count).toList
+  let pickStr := fun (s : String) => do
+    let arr : Array Char := s.foldl (·.push ·) #[]
+    let (i, st, count) ← sliceRange arr.size a b c
+    pure ((slicePick arr i st count).foldl (·.push ·) "")
   match v with
   | .list xs => return .list (← pick xs)
   | .tuple xs => return .tuple (← pick xs)
-  | .str s => return .str (String.join ((← pick (charValues s)).map Value.toStr))
-  | .markup m =>
-    return .markup (Markup.markSafe (String.join ((← pick (charValues m.str)).map Value.toStr)))
+  | .str s => return .str (← pickStr s)
+  | .markup m => return .markup (Markup.markSafe (← pickStr m.str))
   | .undef i => if i.policy pol == .chainable then pure v else failUndef i
   | _ => .error (.typeError s!"'{v.typeName}' object is not subscriptable")
 

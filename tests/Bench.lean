@@ -16,6 +16,8 @@ the case exceeded its memory bound (Linux `VmHWM`, reset before each case).
 * with line statement and line comment prefixes set: 20 MB of plain text,
   10 MB of commented lines, a 10 MB run of blanks (scanned once, not once
   per position) and 2 MB of line statements;
+* value operations on `10^5`-`10^6` items and a 10 MB string: slicing,
+  `unique`, printing a list, the `slice` filter and string indexing;
 * templates nested `10^4` and `10^5` deep (before the linear rewrite, `10^4`
   nested `if`s took 62 s), and a huge `range`.
 
@@ -128,8 +130,44 @@ def big : List Bench := [
   { name := "line statements 2 MB", run := renderL (lineStmts 2000000),
     ok := rendersLen (2000000 / 20 * 2), boundMs := 5000 } ]
 
+/-- `0, 1, ..., n - 1` as a list value. -/
+def intsV (n : Nat) (m : Nat := n) : Value := .list ((List.range n).map (fun i => .int ((i % m : Nat) : Int)))
+
+def rendersText (t : String) : Except TemplateError String → Bool
+  | .ok s => s == t
+  | _ => false
+
+/-- Value operations on request-sized data: one pass each (slicing indexed a
+list per item, `unique` scanned every key seen, `repr` of a list copied the
+rest per item, the `slice` filter dropped from the start per slice, and
+`s[i]` built a value per character). -/
+def valueOps : List Bench := [
+  { name := "x[1:] on 10^6 items", run := fun u => render "{{ x[1:]|length }}" [("x", intsV 1000000)] u,
+    ok := rendersText "999999", boundMs := 500 },
+  { name := "x[::-1] on 10^6 items", run := fun u => render "{{ x[::-1]|first }}" [("x", intsV 1000000)] u,
+    ok := rendersText "999999", boundMs := 500 },
+  { name := "x[::2] on 10^6 items", run := fun u => render "{{ x[::2]|length }}" [("x", intsV 1000000)] u,
+    ok := rendersText "500000", boundMs := 500 },
+  { name := "s[1:] on a 10 MB string", run := fun u => render "{{ s[1:]|length }}" [("s", .str (plain 10000000))] u,
+    ok := rendersText (toString (plainLen 10000000 - 1)), boundMs := 500 },
+  { name := "s[::-1] on a 10 MB string", run := fun u => render "{{ s[::-1]|length }}" [("s", .str (plain 10000000))] u,
+    ok := rendersText (toString (plainLen 10000000)), boundMs := 500 },
+  { name := "s[::2] on a 10 MB string", run := fun u => render "{{ s[::2]|length }}" [("s", .str (plain 10000000))] u,
+    ok := rendersText (toString ((plainLen 10000000 + 1) / 2)), boundMs := 500 },
+  { name := "unique of 10^5 ints", run := fun u => render "{{ x|unique|list|length }}" [("x", intsV 100000 50000)] u,
+    ok := rendersText "50000", boundMs := 200 },
+  { name := "{{ x }} of 10^6 ints", run := fun u => render "{{ x }}" [("x", intsV 1000000)] u,
+    ok := fun r => match r with | .ok s => s.length == 7888890 | _ => false, boundMs := 1000 },
+  { name := "x|pprint of 10^6 ints", run := fun u => render "{{ x|pprint|length }}" [("x", intsV 1000000)] u,
+    ok := rendersText "7888890", boundMs := 1000 },
+  { name := "x|slice(10^5) of 10^5 items", run := fun u => render "{{ x|slice(100000)|list|length }}" [("x", intsV 100000)] u,
+    ok := rendersText "100000", boundMs := 500 },
+  { name := "10^4 indexes into a 10^4-char string",
+    run := fun u => render "{% for i in range(10000) %}{{ s[i] }}{% endfor %}" [("s", .str (rep 1000 "abcdefghij"))] u,
+    ok := rendersLen 10000, boundMs := 1000 } ]
+
 def benches : List Bench :=
-  big ++ sized 10000 2000 ++ sized 100000 20000 ++ [
+  big ++ valueOps ++ sized 10000 2000 ++ sized 100000 20000 ++ [
   { name := "range(100000000)", run := render "{{ range(100000000)|length }}", ok := isOverflow,
     boundMs := 100 },
   { name := "range(100000) loop", run := render "{% for i in range(100000) %}.{% endfor %}",
