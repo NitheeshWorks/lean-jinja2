@@ -219,6 +219,20 @@ def Environment.startContext (env : Environment) (vars : List (String × Value))
     List (String × Value) :=
   vars ++ env.globals ++ builtinGlobals
 
+/-- The template names an `{% include %}` expression names: one string, or a
+list of candidates. -/
+def includeNames (pol : UndefinedPolicy) (heap : Heap) : Value → Except RenderError (List String)
+  | .str s => .ok [s]
+  | .undef i => failUndef i
+  | v => do
+    let xs ← iterOf pol heap v
+    xs.mapM (strOf pol)
+
+/-- The `loop` variable of iteration `i` over `items` (upstream
+`LoopContext`): position, length, neighbours, recursion depth. -/
+def loopValue (items : List Value) (i depth0 : Nat) (recur : Option LoopRec) (cell : Nat) : Value :=
+  .loop i items.length depth0 (if i = 0 then none else items[i - 1]?) items[i + 1]? recur cell
+
 /-! ## Builtin functions -/
 
 /-- `range(stop)`, `range(start, stop[, step])`. -/
@@ -544,12 +558,7 @@ def renderNode (env : Environment) : Nat → Frame → Node → RenderM (List Pi
     | .include e ignoreMissing withContext => do
       let v ← evalE env n fr e
       let h ← get
-      let names ← match v with
-        | .str s => pure [s]
-        | .undef i => liftR (failUndef i)
-        | _ => do
-          let xs ← liftR (iterOf pol h v)
-          liftR (xs.mapM (strOf pol))
+      let names ← liftR (includeNames pol h v)
       match names.findSome? (fun nm => (env.getSource nm).toOption.map (nm, ·)) with
       | none =>
         if ignoreMissing then pure ([], fr)
@@ -637,29 +646,34 @@ def renderLoop (env : Environment) : Nat → Frame → LoopRec → Bool → List
   | n + 1, fr, rec, recursive, items, depth0 => do
     let pol := env.undefined
     let inner : Frame := { fr with top := false }
-    let items ← match rec.filter with
-      | none => pure items
-      | some f => items.filterM (fun x => do
-        let h ← get
-        let binds ← liftR (bindTarget pol h rec.target x)
-        let v ← evalE env n { inner with locals := binds ++ fr.locals } f
-        liftR (truthyOf pol v))
+    let items ← loopItems env n inner rec items
     if items.isEmpty then do
       let (ps, _) ← renderNodes env n inner rec.else_
       pure ps
     else
-      let len := items.length
       let cell := (← get).length
       modify (· ++ [[]])
       (items.zipIdx).foldlM (fun (acc : List Piece) (p : Value × Nat) => do
         let (x, i) := p
-        let loopV := Value.loop i len depth0 (if i = 0 then none else items[i - 1]?) items[i + 1]?
-          (if recursive then some rec else none) cell
+        let loopV := loopValue items i depth0 (if recursive then some rec else none) cell
         let h ← get
         let binds ← liftR (bindTarget pol h rec.target x)
         let (ps, _) ← renderNodes env n { inner with locals := binds ++ ("loop", loopV) :: fr.locals }
           rec.body
         pure (acc ++ ps)) []
+
+/-- The items a loop iterates: those its `if` filter keeps, the filter seeing
+each item bound to the loop target. -/
+def loopItems (env : Environment) : Nat → Frame → LoopRec → List Value → RenderM (List Value)
+  | 0, _, _, _ => throw .fuelExhausted
+  | n + 1, fr, rec, items =>
+    match rec.filter with
+    | none => pure items
+    | some f => items.filterM (fun x => do
+      let h ← get
+      let binds ← liftR (bindTarget env.undefined h rec.target x)
+      let v ← evalE env n { fr with locals := binds ++ fr.locals } f
+      liftR (truthyOf env.undefined v))
 
 /-- Render entry `i` of a block chain with the given locals (the caller's when
 the block tag is `scoped`, and for `super()`). -/
