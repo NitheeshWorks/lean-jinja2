@@ -35,14 +35,38 @@ where
         if c < a then go fuel lo mid else if b < c then go fuel (mid + 1) hi else true
       else false
 
+/-- The ranges `rs` decided for the 128 ASCII code points, once: below
+`0x80` a class test is one array read instead of a binary search
+(`classOf_eq`). -/
+def asciiClass (rs : Array (Nat × Nat)) : Array Bool := (Array.range 128).map (inRanges rs)
+
+/-- Membership in `rs`, through `ascii` (`asciiClass rs`) below `0x80`. -/
+@[inline] def classOf (ascii : Array Bool) (rs : Array (Nat × Nat)) (c : Nat) : Bool :=
+  if h : c < ascii.size then ascii[c] else inRanges rs c
+
+theorem classOf_eq (rs : Array (Nat × Nat)) (c : Nat) :
+    classOf (asciiClass rs) rs c = inRanges rs c := by
+  unfold classOf asciiClass
+  split
+  · simp
+  · rfl
+
+def asciiWord : Array Bool := asciiClass UnicodeTables.word
+def asciiDigit : Array Bool := asciiClass UnicodeTables.digit
+def asciiSpace : Array Bool := asciiClass UnicodeTables.space
+
 /-- Regex `\w` (CPython `re`). -/
-def isWordC (c : Char) : Bool := inRanges UnicodeTables.word c.toNat
+def isWordC (c : Char) : Bool := classOf asciiWord UnicodeTables.word c.toNat
 
 /-- Regex `\d` (CPython `re`). -/
-def isReDigit (c : Char) : Bool := inRanges UnicodeTables.digit c.toNat
+def isReDigit (c : Char) : Bool := classOf asciiDigit UnicodeTables.digit c.toNat
 
 /-- Regex `\s` (CPython `re`). -/
-def isReSpace (c : Char) : Bool := inRanges UnicodeTables.space c.toNat
+def isReSpace (c : Char) : Bool := classOf asciiSpace UnicodeTables.space c.toNat
+
+theorem isWordC_eq (c : Char) : isWordC c = inRanges UnicodeTables.word c.toNat := classOf_eq _ _
+theorem isReDigit_eq (c : Char) : isReDigit c = inRanges UnicodeTables.digit c.toNat := classOf_eq _ _
+theorem isReSpace_eq (c : Char) : isReSpace c = inRanges UnicodeTables.space c.toNat := classOf_eq _ _
 
 /-- `c` matches the pattern letter `t` (ASCII lower case) under `re.IGNORECASE`. -/
 def ciEq (c t : Char) : Bool :=
@@ -261,8 +285,41 @@ def urlizeGo (o : UrlizeOpts) : List Char → List Char → String → String
       urlizeGo o r [] ((if cur.isEmpty then acc else acc ++ urlizeWord o cur.reverse).push c)
     else urlizeGo o r (c :: cur) acc
 
-/-- Upstream `urlize(text, ...)` on the escaped text. -/
-def urlizeText (o : UrlizeOpts) (escaped : String) : String := urlizeGo o escaped.toList [] ""
+/-- The specification: upstream `urlize(text, ...)` on the escaped text,
+over the list of its characters. -/
+def urlizeSpec (o : UrlizeOpts) (escaped : String) : String := urlizeGo o escaped.toList [] ""
+
+/-- A character every link contains: a link matches `_http_re` (a `.` in its
+host, or `:` after `http`/`https` or in an IPv6 address), `mailto:`, the
+email pattern (`@`), or an extra scheme (each ends in `:`, `uriSchemeOk`). A
+word with none of `.`, `:` and `@` is no link, and `urlizeWord` gives it back
+unchanged (stripping, balancing and reassembling keep its characters). -/
+@[inline] def linkC (c : Char) : Bool := c == '.' || c == ':' || c == '@'
+
+/-- `urlizeSpec` in place: one pass over the string's bytes; a word that is
+no link (`linkC`) is copied as a slice, and only the others become character
+lists for `urlizeWord`. `start` is where the current word began and `plain`
+whether it has no `linkC` character so far. -/
+def urlizeIn (o : UrlizeOpts) (s : String) (plainOk : Bool) :
+    Nat → String.Pos.Raw → String.Pos.Raw → Bool → String → String
+  | 0, _, _, _, acc => acc
+  | fuel + 1, p, start, plain, acc =>
+    let word := fun (acc : String) =>
+      if start == p then acc
+      else if plain && plainOk then acc ++ String.Pos.Raw.extract s start p
+      else acc ++ urlizeWord o (String.Pos.Raw.extract s start p).toList
+    if p.byteIdx < s.utf8ByteSize then
+      let c := String.Pos.Raw.get s p
+      let q := String.Pos.Raw.next s p
+      if isReSpace c then urlizeIn o s plainOk fuel q q true ((word acc).push c)
+      else urlizeIn o s plainOk fuel q start (plain && !linkC c) acc
+    else word acc
+
+/-- Upstream `urlize(text, ...)` on the escaped text, in place (equal to
+`urlizeSpec`: `urlizeTextProp` in `tests/Props.lean`). The no-link shortcut
+holds when every extra scheme contains `:`, as `uriSchemeOk` ensures. -/
+def urlizeText (o : UrlizeOpts) (escaped : String) : String :=
+  urlizeIn o escaped (o.extraSchemes.all (·.contains ':')) (escaped.utf8ByteSize + 1) 0 0 true ""
 
 /-- Upstream `_uri_scheme_re`: `^([\w.+-]{2,}:(/){0,2})$`. -/
 def uriSchemeOk (s : String) : Bool :=

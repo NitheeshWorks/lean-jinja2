@@ -52,10 +52,14 @@ bound in milliseconds and the peak-memory bound in MB (0: none). -/
 structure Bench where
   name : String
   run : Unit → Except TemplateError String
-  /-- An input built before the clock starts, for `runOn` (rows comparing
-  against upstream's render time, which excludes building the input). -/
+  /-- Rows compared against jinja2 3.1.6 (`upstream`): the template `src`,
+  compiled once, rendered with `var` bound to `input` (built before the clock
+  starts, as upstream's figure excludes building it); the time is the best of
+  `bestOf` renders 20 ms apart (so one burst of load does not cover them
+  all), as upstream's figure is its best of 15 warm renders. -/
   input : Unit → Value := fun _ => .none
-  runOn : Option (Value → Except TemplateError String) := none
+  upstream : Option (String × String) := none
+  bestOf : Nat := 15
   ok : Except TemplateError String → Bool
   boundMs : Nat
   boundMB : Nat := 0
@@ -194,36 +198,44 @@ def globalOps : List Bench := [
       render "{% for i in range(100000) %}{{ x|random }}{% endfor %}" [("x", intsV 10)] u,
     ok := rendersLen 100000, boundMs := 700 } ]
 
-/-- `x[i]` in a loop over every position: constant time per index. -/
+/-- `x[i]` in a loop over every position: constant time per index. Rows
+naming a jinja2 3.1.6 time are bounded at twice it: upstream's best of 15 warm
+renders of the template compiled once (`upstream-spec/.venv/bin/python -I`,
+pinned to one P-core with `taskset -c 2`, Intel Core Ultra 7 155H, 2026-10-18),
+against our best of 15 on the same machine (there 41, 33 and 47 ms for the
+three index rows; on a low-power E-core, `taskset -c 21`, jinja2 takes 41.6,
+26.3 and 35.2 ms and these rows 49, 45 and 60). -/
 def indexOps : List Bench := [
-  { name := "x[i] for every i of 10^5 items (jinja2 3.1.6: 26 ms)",
+  { name := "x[i] for every i of 10^5 items (jinja2 3.1.6: 26.5 ms)",
     run := fun _ => .ok "", input := fun _ => intsV 100000,
-    runOn := some fun x => render "{% for i in range(100000) %}{% if x[i] == i %}.{% endif %}{% endfor %}"
-      [("x", x)] (),
-    ok := rendersLen 100000, boundMs := 52 },
-  { name := "s[i] for every i of a 10^5-char string (jinja2 3.1.6: 24 ms)",
+    upstream := some ("{% for i in range(100000) %}{% if x[i] == i %}.{% endif %}{% endfor %}", "x"),
+    ok := rendersLen 100000, boundMs := 53 },
+  { name := "s[i] for every i of a 10^5-char string (jinja2 3.1.6: 24.3 ms)",
     run := fun _ => .ok "", input := fun _ => .str (rep 10000 "abcdefghij"),
-    runOn := some fun s => render "{% for i in range(100000) %}{{ s[i] }}{% endfor %}" [("s", s)] (),
-    ok := rendersLen 100000, boundMs := 49 },
-  { name := "s[-i - 1] for every i of a 10^5-char non-ASCII string (jinja2 3.1.6: 33 ms)",
+    upstream := some ("{% for i in range(100000) %}{{ s[i] }}{% endfor %}", "s"),
+    ok := rendersLen 100000, boundMs := 48 },
+  { name := "s[-i - 1] for every i of a 10^5-char non-ASCII string (jinja2 3.1.6: 31.9 ms)",
     run := fun _ => .ok "", input := fun _ => .str (rep 10000 "abcdéfghi€"),
-    runOn := some fun s => render "{% for i in range(100000) %}{{ s[-i - 1] }}{% endfor %}" [("s", s)] (),
-    ok := rendersLen 100000, boundMs := 100 },
+    upstream := some ("{% for i in range(100000) %}{{ s[-i - 1] }}{% endfor %}", "s"),
+    ok := rendersLen 100000, boundMs := 63 },
   { name := "unique of a 10 MB string (jinja2 3.1.6: 3 s)",
     run := fun u => render "{{ s|unique|list|length }}" [("s", .str (plain 10000000))] u,
     ok := rendersText "18", boundMs := 3000, boundMB := 200 },
   { name := "10^6 tags a{{ x }} (8 MB; jinja2 3.1.6: 97 s, 12 GB)",
     run := fun u => render (rep 1000000 "a{{ x }}") [("x", .str "b")] u,
     ok := rendersLen 2000000, boundMs := 10000, boundMB := 700 },
-  { name := "urlize of a 10 MB word (jinja2 3.1.6: ~250 ms)",
+  { name := "urlize of a 10 MB URL (jinja2 3.1.6: 272 ms)",
     run := fun _ => .ok "", input := fun _ => .str (rep 1000000 "www.ab.cd/"),
-    runOn := some fun s => render "{{ s|urlize|length }}" [("s", s)] (),
-    ok := fun r => match r with | .ok _ => true | _ => false, boundMs := 1500 },
-  { name := "cycler of 10^5 items, 10^5 next() (jinja2 3.1.6: 222 ms)",
+    upstream := some ("{{ s|urlize|length }}", "s"),
+    ok := rendersText "20000038", boundMs := 1500, bestOf := 3 },
+  { name := "urlize of a 10 MB non-URL word (jinja2 3.1.6: 210 ms)",
+    run := fun _ => .ok "", input := fun _ => .str (rep 1000000 "aaaaaaaaaa"),
+    upstream := some ("{{ s|urlize|length }}", "s"),
+    ok := rendersText "10000000", boundMs := 420, bestOf := 5 },
+  { name := "cycler of 10^5 items, 10^5 next() (jinja2 3.1.6: 217 ms)",
     run := fun _ => .ok "", input := fun _ => intsV 100000 10,
-    runOn := some fun x =>
-      render "{% set c = cycler(*x) %}{% for i in range(100000) %}{{ c.next() }}{% endfor %}" [("x", x)] (),
-    ok := rendersLen 100000, boundMs := 444 } ]
+    upstream := some ("{% set c = cycler(*x) %}{% for i in range(100000) %}{{ c.next() }}{% endfor %}", "x"),
+    ok := rendersLen 100000, boundMs := 434 } ]
 
 def benches : List Bench :=
   big ++ valueOps ++ globalOps ++ indexOps ++ sized 10000 2000 ++ sized 100000 20000 ++ [
@@ -246,7 +258,8 @@ def peakMB : IO (Option Nat) := do
 /-- `lake exe bench probe <phase> <bytes>`: one workload of about that size,
 for profiling: `lex` (the specification lexer), `lexf` (the in-place one),
 `parse`, `render` (plain text), `tags`, `blocks`, `strlit`, `comment`, `raw`,
-`var`, `varesc`, `gen` (the input only), `dcomments`, and with line prefixes
+`var`, `varesc`, `gen` (the input only), `dcomments`, `loop`, `xi`, `si`,
+`sneg`, `word` (urlize of one word), and with line prefixes
 `lineplain`, `linecomment`, `linestmt`. -/
 def probe (phase : String) (n : Nat) : IO UInt32 := do
   let src := plain n
@@ -284,6 +297,11 @@ def probe (phase : String) (n : Nat) : IO UInt32 := do
     | "si" => match render s!"\{% for i in range({n}) %}\{\{ s[i] }}\{% endfor %}"
           [("s", .str (rep (n / 10) "abcdefghij"))] () with
       | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "sneg" => match render s!"\{% for i in range({n}) %}\{\{ s[-i - 1] }}\{% endfor %}"
+          [("s", .str (rep (n / 10) "abcdéfghi€"))] () with
+      | .ok s => s!"{s.length} chars" | .error e => toString e
+    | "word" => match render "{{ s|urlize|length }}" [("s", .str (rep (n / 10) "aaaaaaaaaa"))] () with
+      | .ok s => s | .error e => toString e
     | "linecomment" => match renderL (commented n) [] () with
       | .ok s => s!"{s.length} chars" | .error e => toString e
     | "linestmt" => match renderL (lineStmts n) [] () with
@@ -302,8 +320,10 @@ def probe (phase : String) (n : Nat) : IO UInt32 := do
 /-- Reset the peak resident memory (Linux; does nothing elsewhere). -/
 def main (args : List String) : IO UInt32 := do
   if let "probe" :: "tpl" :: src :: _ := args then
-    -- an ad-hoc template, with `x` 10^5 ints and `s` a 10^5-char string
-    let vars := [("x", intsV 100000), ("s", .str (rep 10000 "abcdefghij"))]
+    -- an ad-hoc template, with `x` 10^5 ints, `s` a 10^5-char string and `u`
+    -- a 10^5-char non-ASCII one
+    let vars := [("x", intsV 100000), ("s", .str (rep 10000 "abcdefghij")),
+      ("u", .str (rep 10000 "abcdéfghi€"))]
     IO.println s!"inputs: {vars.length}, {match vars with | (_, .list xs) :: _ => xs.size | _ => 0}"
     let t0 ← IO.monoMsNow
     let r := render src vars ()
@@ -316,14 +336,30 @@ def main (args : List String) : IO UInt32 := do
   for b in benches do
     resetPeak
     let inp := b.input ()
-    let size := match inp with | .list xs => xs.size | .str t => t.utf8ByteSize | _ => 0
-    let t0 ← IO.monoMsNow
-    let r := match b.runOn with
-      | some f => if size == 0 then b.run () else f inp
-      | none => b.run ()
-    let good := b.ok r
-    let t1 ← IO.monoMsNow
-    let ms := t1 - t0
+    let (r, good, ms) ← match b.upstream with
+      | some (src, var) =>
+        match ({} : Environment).fromString src with
+        | .error e => pure (.error e, false, 0)
+        | .ok t => do
+          let mut best : Option (Except TemplateError String × Bool × Nat) := none
+          for k in [0:b.bestOf] do
+            if k > 0 then IO.sleep 20
+            let t0 ← IO.monoMsNow
+            -- `k` in the variables keeps each render a separate computation.
+            let r := t.render [(var, inp), ("_run", .int k)]
+            let good := b.ok r
+            let ms := (← IO.monoMsNow) - t0
+            if !good then best := some (r, false, ms); break
+            best := match best with
+              | some (r', g', ms') => if ms' ≤ ms then some (r', g', ms') else some (r, true, ms)
+              | none => some (r, true, ms)
+          pure (best.getD (.ok "", false, 0))
+      | none => do
+        let t0 ← IO.monoMsNow
+        let r := b.run ()
+        let good := b.ok r
+        let t1 ← IO.monoMsNow
+        pure (r, good, t1 - t0)
     let mb ← peakMB
     let memOK := b.boundMB == 0 || (mb.map (decide <| · ≤ b.boundMB)).getD true
     let mem := if b.boundMB == 0 then "" else

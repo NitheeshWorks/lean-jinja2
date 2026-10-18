@@ -98,10 +98,18 @@ be a Hoare triple over a heap.
   arrays, so `x[i]` and `len(x)` are O(1); functions that recurse over the
   items match `⟨xs⟩` (the array's list). A string is UTF-8, so `s[i]` goes
   through a view (`RepoImpl/StrIndex.lean`: the character count and every
-  16th byte offset, none for ASCII) that the renderer keeps for the last
-  string indexed in heap cell 1 (`getitemM`); `strViewProp` checks it against
-  indexing by definition. Heap cell 0 is the random source, so namespaces
-  start at address 2.
+  8th byte offset, none for ASCII; a lookup walks from the nearer
+  checkpoint) that the renderer keeps for the last string indexed in heap
+  cell 1 (`getitemM`); `strViewProp` checks it against indexing by
+  definition. A Latin-1 character comes back as a shared one-character
+  string (`charValue_eq`), as CPython's are. Heap cell 0 is the random
+  source, so namespaces start at address 2.
+* **Operand shortcuts.** `evalE` reads an operand that is a constant or a
+  bound name directly (`leafValue?`, equal to evaluating it: `evalE_leaf`) in
+  `x[i]`, on the right of a single comparison (`compareM_eq`), under unary
+  `-`, and as an `int` right operand of `+`/`-`; `arith` adds and subtracts
+  two `int`s first, and `natDigits` conses digits onto an accumulator
+  (`natDigits_eq_acc`, `@[csimp]`).
 * **The loop variable** exists only when the loop body names `loop` (or the
   loop is recursive), as upstream's code generator decides: an included
   template or a macro called from a body that does not name it sees no
@@ -127,10 +135,12 @@ Listed here with the reason, and in `docs/traceability.toml` with
   10 MB / 20 MB of plain text, `{{ x }}` with a 20 MB value (plain and
   autoescaped) and a 10 MB string literal within 2 s and 300 MB of peak
   resident memory. Rows naming a jinja2 3.1.6 time compare against it:
-  indexing every position of 10^5 items or characters within 2x, a cycler
-  over 10^5 items, `unique` of a 10 MB string, and 10^6 tags in 700 MB
-  peak (upstream: 97 s and 12 GB). `urlize` of one 10 MB word is linear
-  but about 3.5x upstream.
+  the template compiled once, our best of 15 renders 20 ms apart against
+  upstream's best of 15 on the same machine (recorded in `indexOps`), bounded
+  at 2x for indexing every position of 10^5 items or characters, a cycler
+  over 10^5 items and `urlize` of a 10 MB word that is no link; then
+  `unique` of a 10 MB string, and 10^6 tags in 700 MB peak (upstream: 97 s
+  and 12 GB). `urlize` of a 10 MB URL is linear but about 2.4x upstream.
 * **`sort`, `unique`, `trim`, `wordcount`, `center`** are covered by property
   tests and by the upstream cases in `tests/Conformance.lean`. The properties
   are: a sorted permutation, first occurrences in order, no surrounding
@@ -164,7 +174,11 @@ Each one has a `docs/traceability.toml` row (`deviation` or `excluded`).
   `scripts/unicode_tables.py` measures (`RepoImpl/UnicodeTables.lean`). A
   conformance case runs the 6000 Unicode-heavy words of
   `tests/golden/urlize_unicode.json` (`scripts/urlize_corpus.py`) against
-  jinja2 3.1.6's output, with no difference. It keeps
+  jinja2 3.1.6's output, with no difference. Below `0x80` a class test is
+  one read of a table computed from the ranges (`classOf_eq`). `urlizeText`
+  runs in place and copies a word with no `.`, `:` or `@` unchanged (no
+  link contains none of them); `urlizeTextProp` checks it equals
+  `urlizeSpec`, the pass over the character list. It keeps
   UP-059: a URL whose scheme is not lower case gets `https://` prepended.
   A `trim_url_limit` that is not an integer fails even when no link is made
   (upstream fails only when it trims).

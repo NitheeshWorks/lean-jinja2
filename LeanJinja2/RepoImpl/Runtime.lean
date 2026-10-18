@@ -316,6 +316,7 @@ def arith (op : BinOp) (a b : Value) : Except ValueError Value :=
   match op with
   | .add =>
     match a, b with
+    | .int x, .int y => .ok (.int (x + y))
     | .markup m, .str s => .ok (.markup (m ++ s))
     | .str s, .markup m => .ok (.markup (s ++ m))
     | .markup m, .markup n => .ok (.markup (m ++ n))
@@ -329,6 +330,9 @@ def arith (op : BinOp) (a b : Value) : Except ValueError Value :=
         else .ok (.int (x.1 + y.1))
       | _, _ => tyErr "+"
   | .sub =>
+    match a, b with
+    | .int x, .int y => .ok (.int (x - y))
+    | _, _ =>
     match a.num?, b.num? with
     | some x, some y => if a.isFloat || b.isFloat then .ok (mkFloat (decSub x y))
       else .ok (.int (x.1 - y.1))

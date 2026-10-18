@@ -304,32 +304,74 @@ def strViewProp : Property where
     let cell := if k == 3 then [("junk", Value.none)] else cell
     let want := (indexRef s.toList i).map String.singleton
     let (got, cell') := strIndexCached cell s i
+    let got := got.map String.singleton
     let (again, _) := strIndexCached (cell'.getD cell) s i
+    let again := again.map String.singleton
     let xs := s.toList.map (fun c => Value.str (String.singleton c))
     let gotL := (indexList xs.toArray i).map Value.toStr
     if got == want && again == want && strIndex s i == want &&
         gotL == (indexRef xs i).map Value.toStr then (none, r)
     else (some s!"{repr s}[{i}] cell {k}: {got} {again}, want {want}", r)
 
+/-- Pearson's statistic, times the expected count, of 10000 draws of
+`random` over 10 items seeded by `seed`: `Σ (count - 1000)²`. -/
+def chiSquare1000 (seed : UInt64) : Nat := Id.run do
+  let xs : Array Value := (Array.range 10).map (fun (i : Nat) => Value.int (i : Int))
+  let mut s := seed
+  let mut c := Array.replicate 10 (0 : Nat)
+  for _ in [0:10000] do
+    match randomChoice .default [] s (.list xs) with
+    | .ok (.int i, s') => s := s'; c := c.modify i.toNat (· + 1)
+    | _ => pure ()
+  return c.foldl (fun (acc n : Nat) => acc + ((n : Int) - 1000).natAbs ^ 2) 0
+
+/-- Chi-square goodness of fit: 10 bins, 10000 draws, `X² < 27.88`, the 0.999
+quantile of chi-square with 9 degrees of freedom (`X² = Σ (n - 1000)² / 1000`,
+so `Σ (n - 1000)² < 27880`). Each case draws five seeds; a fair source exceeds
+the bound once in a thousand seeds, so one of the five may (two or more: about
+1e-5 per case, 0.2% per run of 200 cases), while a source biased by 2% on one
+item exceeds it on most seeds. -/
 def randomUniformProp : Property where
-  name := "random is uniform: 3000 draws over 10 items land 300 ± 90 times each"
+  name := "random is uniform: chi-square of 10000 draws over 10 items below 27.88 (p = 0.001, 9 df)"
+  check r := Id.run do
+    let mut r := r
+    let mut over : List (Nat × Nat) := []
+    for _ in [0:5] do
+      let (seed, r') := r.nat 1000000000
+      r := r'
+      let x := chiSquare1000 (UInt64.ofNat seed)
+      if x ≥ 27880 then over := (seed, x) :: over
+    return (if over.length ≤ 1 then none else some s!"seeds with X² × 1000 ≥ 27880: {over}", r)
+
+/-- Text built from pieces of links, brackets, entities and whitespace. -/
+def genUrlText (r : Rng) : String × Rng := Id.run do
+  let (n, r) := r.nat 12
+  let mut r := r
+  let mut out : String := ""
+  for _ in [0:n] do
+    let (p, r') := r.pick ["a", "é", " ", "\n", "\t", ".", ":", "@", "(", ")", "&lt;", "&gt;", "<",
+      ">", ",", "www.", "http://", "https://", "x.com", "b.org", "/p?q#f", "mailto:", "ftp:", "1.2.3.4",
+      "[::1]", "xn--ab", "\u00a0", "\u2003"]
+    r := r'
+    out := out ++ p
+  return (out, r)
+
+def urlizeTextProp : Property where
+  name := "urlize in place equals urlize over the character list (urlizeSpec)"
   check r :=
-    let (seed, r) := r.nat 1000000
-    let xs : Array Value := (Array.range 10).map (fun (i : Nat) => Value.int (i : Int))
-    let go : Nat → UInt64 → Array Nat → Array Nat := fun k s0 c0 => Id.run do
-      let mut s := s0
-      let mut c := c0
-      for _ in [0:k] do
-        match randomChoice .default [] s (.list xs) with
-        | .ok (.int i, s') => s := s'; c := c.modify i.toNat (· + 1)
-        | _ => pure ()
-      return c
-    let counts := go 3000 (UInt64.ofNat seed) (Array.replicate 10 0)
-    if counts.all (fun n => 210 ≤ n && n ≤ 390) then (none, r)
-    else (some s!"seed {seed}: counts {counts}", r)
+    let (s, r) := genUrlText r
+    let (k, r) := r.nat 4
+    let o : UrlizeOpts := match k with
+      | 0 => {}
+      | 1 => { trim := some 5, relAttr := " rel=\"x\"" }
+      | 2 => { extraSchemes := ["ftp:", "a"] }
+      | _ => { extraSchemes := ["mailto:"], targetAttr := " target=\"_b\"" }
+    let got := urlizeText o s
+    let want := urlizeSpec o s
+    if got == want then (none, r) else (some s!"opts {k} {repr s}: {repr got}, want {repr want}", r)
 
 def properties : List Property := [renderTotal, printParse, sortProp, uniqueProp, sliceProp, trimProp, wordcountProp,
-  centerProp, lipsumProp, randomProp, randomUniformProp, strViewProp]
+  centerProp, lipsumProp, randomProp, randomUniformProp, strViewProp, urlizeTextProp]
 
 def main (args : List String) : IO UInt32 := do
   let seed := (args.head? >>= String.toNat?).getD 88172645463325252

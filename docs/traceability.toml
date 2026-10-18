@@ -202,16 +202,16 @@ status = "deviation"
 realises = ["LeanJinja2.randomChoice", "LeanJinja2.lipsum", "LeanJinja2.lipsumCall", "LeanJinja2.SplitMix.next", "LeanJinja2.applyFilterM", "LeanJinja2.Filters.random"]
 theorem = ["LeanJinja2.SplitMix.below_lt"]
 test = ["tests/Props.lean", "tests/Conformance.lean", "tests/Bench.lean"]
-note = "SplitMix64 seeded by Environment.randomSeed, state in heap cell 0; a render is deterministic, upstream's is not. lipsum follows generate_lorem_ipsum's paragraph, comma and full-stop rules with its own Latin words; lipsumProp checks n paragraphs, the word-count bounds of test_lorem_ipsum_min/max, no word twice in a row and the <p> markup. randomProp checks the pick is an item; randomUniformProp that 3000 draws over 10 items land 300 ± 90 times each. An empty randrange raises ValueError and cycler() RuntimeError (ValueError.python), as upstream. Inside map('random') items share one draw state. Benches: lipsum(2000) 300 ms, 10^5 |random 700 ms."
+note = "SplitMix64 seeded by Environment.randomSeed, state in heap cell 0; a render is deterministic, upstream's is not. lipsum follows generate_lorem_ipsum's paragraph, comma and full-stop rules with its own Latin words; lipsumProp checks n paragraphs, the word-count bounds of test_lorem_ipsum_min/max, no word twice in a row and the <p> markup. randomProp checks the pick is an item; randomUniformProp is a chi-square goodness-of-fit test: 10000 draws over 10 items with X² below 27.88 (the 0.999 quantile, 9 degrees of freedom), five seeds per case, at most one of them over. An empty randrange raises ValueError and cycler() RuntimeError (ValueError.python), as upstream. Inside map('random') items share one draw state. Benches: lipsum(2000) 300 ms, 10^5 |random 700 ms."
 
 [[requirement]]
 id = "filters.urlize"
 upstream = "tests/test_filters.py::TestFilter::test_urlize"
 title = "urlize: links, mailto and email addresses, rel/target/nofollow, trim_url_limit, extra_schemes and the urlize.* policies"
 status = "tested"
-realises = ["LeanJinja2.Filters.urlize", "LeanJinja2.urlizeText", "LeanJinja2.httpMatch", "LeanJinja2.emailMatch", "LeanJinja2.uriSchemeOk", "LeanJinja2.balance", "LeanJinja2.isWordC", "LeanJinja2.UnicodeTables.word"]
+realises = ["LeanJinja2.Filters.urlize", "LeanJinja2.urlizeText", "LeanJinja2.urlizeSpec", "LeanJinja2.classOf_eq", "LeanJinja2.httpMatch", "LeanJinja2.emailMatch", "LeanJinja2.uriSchemeOk", "LeanJinja2.balance", "LeanJinja2.isWordC", "LeanJinja2.UnicodeTables.word"]
 test = ["tests/Conformance.lean", "tests/Bench.lean", "tests/golden/urlize_unicode.json", "scripts/urlize_corpus.py", "scripts/unicode_tables.py"]
-note = "Upstream's regexes are decided directly, one linear pass per word (each is anchored at both ends and the host must end at the first character outside its alphabet). \\w, \\d and \\s are CPython re's, from tables measured by scripts/unicode_tables.py. The conformance case test_urlize[unicode-corpus] checks 6000 Unicode-heavy words (tests/golden/urlize_unicode.json) against jinja2 3.1.6: no difference. Keeps UP-059 (an upper-case scheme gets https:// prepended). Benches: 1 MB of text 500 ms, a 1 MB word 300 ms, 10^5 brackets 200 ms."
+note = "Upstream's regexes are decided directly, one linear pass per word (each is anchored at both ends and the host must end at the first character outside its alphabet). \\w, \\d and \\s are CPython re's, from tables measured by scripts/unicode_tables.py. The conformance case test_urlize[unicode-corpus] checks 6000 Unicode-heavy words (tests/golden/urlize_unicode.json) against jinja2 3.1.6: no difference. Keeps UP-059 (an upper-case scheme gets https:// prepended). ASCII class tests read a table computed from the ranges (classOf_eq). urlizeText runs in place, copying a word with no '.', ':' or '@' unchanged; urlizeTextProp checks it equals urlizeSpec. Benches: 1 MB of text 500 ms, a 1 MB word 300 ms, 10^5 brackets 200 ms, a 10 MB non-URL word 420 ms (2x jinja2's 210 ms; about 130 ms), a 10 MB URL 1500 ms (jinja2 272 ms; about 650 ms)."
 
 [[requirement]]
 id = "filters.groupby-tuple"
@@ -305,10 +305,10 @@ id = "safety.indexing"
 upstream = "src/jinja2/environment.py::Environment.getitem"
 title = "x[i] in constant time: array-backed lists and tuples, a cached position view for strings"
 status = "tested"
-realises = ["LeanJinja2.indexList", "LeanJinja2.getitemM", "LeanJinja2.strIndexCached", "LeanJinja2.strView", "LeanJinja2.revFlattenFast", "LeanJinja2.Piece.flattenFast", "LeanJinja2.bindTargetM"]
+realises = ["LeanJinja2.indexList", "LeanJinja2.getitemM", "LeanJinja2.strIndexCached", "LeanJinja2.strView", "LeanJinja2.revFlattenFast", "LeanJinja2.Piece.flattenFast", "LeanJinja2.bindTargetM", "LeanJinja2.charValue_eq", "LeanJinja2.evalE_leaf", "LeanJinja2.compareM_eq"]
 theorem = ["LeanJinja2.revFlatten_eq_fast", "LeanJinja2.Piece.flatten_eq_fast", "LeanJinja2.bindTargetM_eq", "LeanJinja2.renderNodes_succ"]
 test = ["tests/Props.lean", "tests/Bench.lean"]
-note = "Value.list/.tuple hold arrays. s[i] reads the view of heap cell 1 (character count, every 16th byte offset, none for ASCII); strViewProp checks strIndexCached and indexList against indexing by definition, whatever the cell holds. Bench, with the input built before the clock: x[i] over 10^5 items 52 ms and s[i] over 10^5 characters 49 ms (jinja2 3.1.6: 26 and 24 ms), s[-i - 1] over a non-ASCII string 100 ms (33 ms; about 70 ms measured), cycler of 10^5 items with 10^5 next() 444 ms (222 ms)."
+note = "Value.list/.tuple hold arrays. s[i] reads the view of heap cell 1 (character count, every 8th byte offset, none for ASCII; the walk starts from the nearer checkpoint); strViewProp checks strIndexCached and indexList against indexing by definition. Each row is our best of 15 renders of the template compiled once, bounded at 2x jinja2 3.1.6's best of 15 on the same machine (Core Ultra 7 155H, P-core): x[i] over 10^5 items 53 ms (26.5; about 42), s[i] over 10^5 characters 48 ms (24.3; about 33), s[-i - 1] over a non-ASCII string 63 ms (31.9; about 47), cycler of 10^5 items with 10^5 next() 434 ms (217; about 78)."
 
 [[requirement]]
 id = "safety.tag-memory"

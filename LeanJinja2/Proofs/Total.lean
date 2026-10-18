@@ -375,6 +375,16 @@ theorem Safe.applyFilterM' {env : Environment} {fr : Frame} {name : String} {v :
     Safe (applyFilterM env fr name v args kw) (fun _ => True) := by
   unfold applyFilterM; safe_steps
 
+/-- A comparison never runs out of fuel. -/
+theorem Safe.compareM' {pol : UndefinedPolicy} {op : CmpOp} {a b : Value} :
+    Safe (compareM pol op a b) (fun _ => True) := by
+  intro s
+  unfold compareM
+  split
+  · exact ⟨by simp, fun _ _ _ => trivial⟩
+  · rename_i e _
+    exact ⟨by simpa using toRenderError_ne e, fun _ _ h => by simp at h⟩
+
 /-- Indexing never runs out of fuel. -/
 theorem Safe.getitemM' {pol : UndefinedPolicy} {v k : Value} :
     Safe (getitemM pol v k) (fun _ => True) := by
@@ -462,12 +472,14 @@ theorem Good.eval_step : ∀ fr e, FrOK fr → e.nonrec = true → e.depth < n +
     refine Safe.bindT (ih.evals h ha (by omega)) fun av => ?_
     refine Safe.bindT (ih.evalKw h hk (by omega)) fun kv => ?_
     exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun p => ih.call fr fv p.1 p.2 hfv (by omega)
-  case h_18 x op y =>
+  case h_19 x op y =>
     simp only [opsNonrec, opsDepth, Bool.and_true] at hn hd
     refine Safe.bindT (ih.eval fr x h hn.1 (by omega)) fun _ => ?_
+    split
+    · exact Safe.compareM'
     refine Safe.bindT (ih.eval fr y h hn.2 (by omega)) fun _ => ?_
     exact Safe.bindT Safe.get' fun _ => Safe.bindT Safe.liftT fun _ => Safe.pure' trivial
-  case h_19 x ops _ =>
+  case h_20 x ops _ =>
     refine Safe.bindT (ih.eval fr x h hn.1 (by omega)) fun lv => ?_
     refine Safe.bindT Safe.get' fun hp => ?_
     refine Safe.bindT (Safe.foldlM' (fun _ => True) ops _ (fun b p hp _ => ?_) trivial) fun _ => Safe.pure' trivial

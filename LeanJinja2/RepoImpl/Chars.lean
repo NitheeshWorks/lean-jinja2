@@ -158,6 +158,28 @@ def natDigits (n : Nat) : List Char :=
 termination_by n
 decreasing_by omega
 
+/-- `natDigits n ++ acc`, consing each digit onto the accumulator (no
+appends): `natDigits_eq_acc` makes compiled code use it. -/
+def natDigitsAcc (n : Nat) (acc : List Char) : List Char :=
+  if h : n < 10 then Char.ofNat (48 + n) :: acc
+  else natDigitsAcc (n / 10) (Char.ofNat (48 + n % 10) :: acc)
+termination_by n
+decreasing_by omega
+
+theorem natDigitsAcc_eq (n : Nat) (acc : List Char) : natDigitsAcc n acc = natDigits n ++ acc := by
+  induction n using Nat.strongRecOn generalizing acc with
+  | ind n ih =>
+    rw [natDigitsAcc, natDigits]
+    split
+    · rfl
+    · rw [ih (n / 10) (by omega)]; simp
+
+/-- `natDigits`, through `natDigitsAcc`. -/
+def natDigitsFast (n : Nat) : List Char := natDigitsAcc n []
+
+@[csimp] theorem natDigits_eq_acc : @natDigits = @natDigitsFast := by
+  funext n; simp [natDigitsFast, natDigitsAcc_eq]
+
 /-- Decimal text of an integer. -/
 def intDigits (i : Int) : List Char :=
   if i < 0 then '-' :: natDigits i.natAbs else natDigits i.natAbs

@@ -150,6 +150,13 @@ def Const.toValue : Const → Value
   | .float m s => mkFloat (m, s)
   | .str s => .str s
 
+/-- The value of an expression that is a constant or a bound name, without
+the monad (`evalE` on it gives the same, `evalE_leaf`). -/
+@[inline] def leafValue? (fr : Frame) : Expr → Option Value
+  | .const c => some c.toValue
+  | .name x => fr.lookup? x
+  | _ => none
+
 /-- What filters and tests read, for a frame. -/
 def Environment.fctx (env : Environment) (fr : Frame) (heap : Heap) : FCtx :=
   { autoescape := fr.autoescape, pol := env.undefined, heap, leeway := env.truncateLeeway,
@@ -187,11 +194,11 @@ def getitemM (pol : UndefinedPolicy) (v k : Value) : RenderM Value := do
   | .str s, .int i => do
     let (r, cell) := strIndexCached ((h[1]?).getD []) s i
     if let some c := cell then set (h.set 1 c)
-    pure (itemOr h v k (r.map Value.str))
+    pure (itemOr h v k (r.map charValue))
   | .markup m, .int i => do
     let (r, cell) := strIndexCached ((h[1]?).getD []) m.str i
     if let some c := cell then set (h.set 1 c)
-    pure (itemOr h v k (r.map (fun t => .markup (Markup.markSafe t))))
+    pure (itemOr h v k (r.map (fun c => .markup (Markup.markSafe (String.singleton c)))))
   | .list xs, .int i => pure (itemOr h v k (indexList xs i))
   | _, _ => liftR (getitemV pol h v k)
 
@@ -435,6 +442,14 @@ def compareOp (pol : UndefinedPolicy) (heap : Heap) (op : CmpOp) (a b : Value) :
         | .lt => o == .lt | .lteq => o != .gt | .gt => o == .gt | _ => o != .lt)
 
 
+/-- One comparison, reading the heap: `do let h ← get; let ok ← liftR
+(compareOp pol h op a b); pure (.bool ok)` without the intermediate state
+pairs (`compareM_eq`). -/
+def compareM (pol : UndefinedPolicy) (op : CmpOp) (a b : Value) : RenderM Value :=
+  fun h => match compareOp pol h op a b with
+    | .ok r => .ok (.bool r, h)
+    | .error e => .error e.toRenderError
+
 mutual
 
 /-- Evaluate an expression. -/
@@ -476,10 +491,16 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       let b ← b.mapM (evalE env n fr)
       let c ← c.mapM (evalE env n fr)
       liftR (sliceV pol v a b c)
-    | .getitem x i => do
-      let v ← evalE env n fr x
-      let k ← evalE env n fr i
-      getitemM pol v k
+    | .getitem x i =>
+      match leafValue? fr x, leafValue? fr i with
+      | some v, some k => getitemM pol v k
+      | some v, none => do
+        let k ← evalE env n fr i
+        getitemM pol v k
+      | _, _ => do
+        let v ← evalE env n fr x
+        let k ← evalE env n fr i
+        getitemM pol v k
     | .slice .. => throw (.typeError "a slice is only valid in a subscript")
     | .call f args kw => do
       let fv ← evalE env n fr f
@@ -503,6 +524,17 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       let (av, kv) ← liftR (spreadArgs pol h av kv)
       let b ← liftR (applyTest (env.fctx fr h) nm v av kv)
       pure (.bool b)
+    | .unop .neg x =>
+      match leafValue? fr x with
+      | some (.int i) => pure (.int (-i))
+      | _ => do
+      let v ← evalE env n fr x
+      match v with
+      | .undef i => liftR (failUndef i)
+      | .int i => pure (.int (-i))
+      | .bool b => pure (.int (if b then -1 else 0))
+      | .float m s => pure (.float (-m) s)
+      | _ => throw (.typeError s!"bad operand type for unary -: '{v.typeName}'")
     | .unop op x => do
       let v ← evalE env n fr x
       match op, v with
@@ -525,6 +557,18 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       if t then pure lv else evalE env n fr r
     | .binop op l r => do
       let lv ← evalE env n fr l
+      match leafValue? fr r with
+      | some (.int y) => match op, lv with
+        | .add, .int x => pure (.int (x + y))
+        | .sub, .int x => pure (.int (x - y))
+        | _, .int x => liftR (arith op (.int x) (.int y))
+        | _, _ => do
+          let rv ← evalE env n fr r
+          match lv, rv with
+          | .undef i, _ => liftR (failUndef i)
+          | _, .undef i => liftR (failUndef i)
+          | _, _ => liftR (arith op lv rv)
+      | _ => do
       let rv ← evalE env n fr r
       match lv, rv with
       | .undef i, _ => liftR (failUndef i)
@@ -532,6 +576,9 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
       | _, _ => liftR (arith op lv rv)
     | .compare x [(op, y)] => do
       let lv ← evalE env n fr x
+      match leafValue? fr y with
+      | some rv => compareM pol op lv rv
+      | none => do
       let rv ← evalE env n fr y
       let h ← get
       let ok ← liftR (compareOp pol h op lv rv)
@@ -970,5 +1017,24 @@ theorem renderNodes_succ (env : Environment) (n : Nat) (fr : Frame) (nodes : Lis
     congr 1; funext r
     split <;> simp [revFlatten]
   | _ :: _ :: _ => simp [renderNodes]
+
+/-- The shortcuts `evalE` takes for operands that are constants or bound
+names (`leafValue?`: in `x[i]`, the right of a comparison, `-x`, and an `int`
+right operand of arithmetic) give what evaluating them does, whenever the
+fuel allows evaluating them at all. -/
+theorem evalE_leaf (env : Environment) (n : Nat) (fr : Frame) (e : Expr) (v : Value)
+    (h : leafValue? fr e = some v) : evalE env (n + 1) fr e = pure v := by
+  cases e with
+  | const c => simp only [leafValue?, Option.some.injEq] at h; subst h; simp [evalE]
+  | name x => simp only [leafValue?] at h; simp [evalE, h]
+  | _ => simp [leafValue?] at h
+
+theorem compareM_eq (pol : UndefinedPolicy) (op : CmpOp) (a b : Value) :
+    compareM pol op a b = (do let h ← get; let ok ← liftR (compareOp pol h op a b); pure (.bool ok)) := by
+  funext s
+  simp only [compareM]
+  cases hc : compareOp pol s op a b <;>
+    simp [hc, liftR, bind, StateT.bind, get, getThe, MonadStateOf.get, StateT.get, pure, StateT.pure,
+      Except.pure, Except.bind, throw, throwThe, MonadExceptOf.throw, StateT.lift]
 
 end LeanJinja2
