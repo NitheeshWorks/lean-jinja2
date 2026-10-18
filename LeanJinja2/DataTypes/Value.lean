@@ -65,8 +65,9 @@ inductive Value where
   | native (name : String)
   /-- A bound method of a builtin value. -/
   | method (recv : Value) (name : String)
-  /-- The `loop` variable of a `for` loop. -/
+  /-- The `loop` variable of a `for` loop; `cell` is the heap cell `loop.changed` uses. -/
   | loop (index0 length depth0 : Nat) (prev next : Option Value) (recur : Option LoopRec)
+      (cell : Nat)
   /-- `super()` of block `name`, rendering entry `depth` of the block chain. -/
   | superRef (name : String) (depth : Nat)
   /-- A `namespace()` object, by heap address. -/

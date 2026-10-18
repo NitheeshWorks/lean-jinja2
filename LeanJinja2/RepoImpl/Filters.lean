@@ -228,7 +228,7 @@ def cmpTest (op : String) (a b : Value) : Except RenderError Bool :=
 /-- Whether a value is callable. -/
 def Value.isCallable : Value → Bool
   | .macro .. | .native _ | .method .. | .superRef .. => true
-  | .loop _ _ _ _ _ (some _) => true
+  | .loop _ _ _ _ _ (some _) _ => true
   | _ => false
 
 /-- Apply a test (upstream `Environment.call_test`). -/
@@ -379,15 +379,26 @@ def fileSizeFormat (x : Int × Nat) (binary : Bool) : String :=
 
 /-- Upstream `do_round`. -/
 def roundFilter (x : Int × Nat) (precision : Int) (method : String) : Except RenderError Value :=
-  let p := precision.toNat
+  if precision < 0 then
+    -- round x / 10^k to an integer, then scale back
+    let k := precision.natAbs
+    let y := (x.1, x.2 + k)
+    match roundFilterAux y 0 method with
+    | .ok (m, s) => .ok (mkFloat (decMul (m, s) ((10 : Int) ^ k, 0)))
+    | .error e => .error e
+  else match roundFilterAux x precision.toNat method with
+    | .ok d => .ok (mkFloat d)
+    | .error e => .error e
+where
+  roundFilterAux (x : Int × Nat) (p : Nat) (method : String) : Except RenderError (Int × Nat) :=
   match method with
-  | "common" => .ok (mkFloat (roundHalfEven x.1 x.2 p, p))
+  | "common" => .ok (roundHalfEven x.1 x.2 p, p)
   | "floor" =>
     let d : Int := 10 ^ (x.2 - min x.2 p)
-    .ok (mkFloat (Int.fdiv (x.1 * 10 ^ (p - min x.2 p)) d, p))
+    .ok (Int.fdiv (x.1 * 10 ^ (p - min x.2 p)) d, p)
   | "ceil" =>
     let d : Int := 10 ^ (x.2 - min x.2 p)
-    .ok (mkFloat (-(Int.fdiv (-(x.1 * 10 ^ (p - min x.2 p))) d), p))
+    .ok (-(Int.fdiv (-(x.1 * 10 ^ (p - min x.2 p))) d), p)
   | _ => .error (.runtime "method must be common, ceil or floor")
 
 /-- Upstream `do_xmlattr`. -/
@@ -821,7 +832,7 @@ def applyFilterD (fc : FCtx) : Nat → String → Value → List Value → List 
   | _ =>
     match fc.filters.lookup name with
     | some f => liftNative (f fc.vars (v :: args) kwargs)
-    | none => .error (.assertion s!"No filter named '{name}'.")
+    | none => .error (.runtime s!"No filter named '{name}'.")
 
 end
 

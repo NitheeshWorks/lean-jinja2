@@ -204,10 +204,13 @@ def Environment.compile (env : Environment) (src : String) : Except RenderError 
           else if k == 0 then p else posOf ts (k - 1) (p + t.raw.length)
       .error (.syntax e.msg (lineOf src (posOf toks idx 0)))
     | .ok body =>
-      let fc : FCtx := { filters := env.filters }
-      match (filterNames body).find? (fun f => !fc.hasFilter f) with
-      | some f => .error (.assertion s!"No filter named '{f}'.")
+      let fc : FCtx := { filters := env.filters, tests := env.tests }
+      match (hardFilterTestNames body).find? (fun p => !(if p.1 then fc.hasFilter p.2 else fc.hasTest p.2)) with
+      | some (isF, f) => .error (.assertion s!"No {if isF then "filter" else "test"} named '{f}'.")
       | none =>
+        if (forTargets body).any (fun t => t.names.contains "loop") then
+          .error (.assertion "Can't assign to special loop variable in for-loop target.")
+        else
         match firstDuplicate ((blockDefs body).map (·.1)) with
         | some b => .error (.assertion s!"block '{b}' defined twice")
         | none => .ok body
@@ -290,6 +293,11 @@ def evalE (env : Environment) : Nat → Frame → Expr → RenderM Value
         let v ← evalE env n fr p.2
         pure (k, v))
       pure (.dict vs)
+    | .getattr (.name "self") a =>
+      match fr.lookup? "self" with
+      | none => pure (if (fr.chain a).isEmpty then .undef (.attr "jinja2.runtime.TemplateReference object" a)
+          else .superRef a 0)
+      | some v => do let h ← get; liftR (getattrV pol h v a)
     | .getattr x a => do
       let v ← evalE env n fr x
       let h ← get
@@ -409,10 +417,18 @@ def callV (env : Environment) : Nat → Frame → Value → List Value → List 
       match env.functions.lookup nm with
       | some g => liftR (liftNative (g (fr.locals ++ fr.ctx) args kw))
       | none => throw (.typeError s!"'{nm}' is not callable")
+    | .method (.loop _ _ _ _ _ _ cell) "changed" => do
+      let h ← get
+      let cur := Value.tuple args
+      let last := ((h[cell]?).getD []).lookup "last"
+      match last with
+      | some l => if Value.pyEq l cur then pure (.bool false) else do
+          set (heapSet h cell "last" cur); pure (.bool true)
+      | none => do set (heapSet h cell "last" cur); pure (.bool true)
     | .method recv nm => do
       let h ← get
       liftR (callMethod (env.fctx fr h) recv nm args kw)
-    | .loop _ _ d _ _ (some rec) => do
+    | .loop _ _ d _ _ (some rec) _ => do
       let items ← match args with
         | [x] => do let h ← get; liftR (iterOf pol h x)
         | _ => throw (.typeError "loop() takes exactly one argument")
@@ -435,23 +451,19 @@ def callMacro (env : Environment) : Nat → Frame → String → List Param → 
   | n + 1, fr, nm, ps, body, usesCaller, clo, args, kw => do
     let pol := env.undefined
     let base : Frame := { fr with locals := clo, top := false, curBlock := none }
-    -- bind the declared parameters
-    let (bound, kwLeft) ← (ps.zipIdx).foldlM (fun (st : List (String × Value) × List (String × Value))
-        (p : Param × Nat) => do
-      let ((pn, dflt), i) := p
-      let (acc, kwl) := st
-      match args[i]? with
-      | some v => pure ((pn, v) :: acc, kwl)
-      | none =>
-        match kwl.lookup pn with
-        | some v => pure ((pn, v) :: acc, kwl.filter (·.1 != pn))
-        | none =>
-          match dflt with
-          | some e => do
-            let v ← evalE env n { base with locals := acc ++ clo } e
-            pure ((pn, v) :: acc, kwl)
-          | none => pure ((pn, .undef (.hint s!"parameter '{pn}' was not provided")) :: acc, kwl))
-      ([], kw)
+    -- the values passed for each parameter (positionally, then by keyword)
+    let passed : List (String × Option Value) := (ps.zipIdx).map (fun (p : Param × Nat) =>
+      (p.1.1, match args[p.2]? with | some v => some v | none => kw.lookup p.1.1))
+    let kwLeft := kw.filter (fun k => !((ps.drop args.length).map Prod.fst).contains k.1)
+    let missing := fun (pn : String) => Value.undef (.hint s!"parameter '{pn}' was not provided")
+    let init : List (String × Value) := passed.map (fun p => (p.1, p.2.getD (missing p.1)))
+    -- defaults, in order, each seeing the parameters as bound so far
+    let bound ← (ps.zip passed).foldlM (fun (cur : List (String × Value)) (q : Param × (String × Option Value)) => do
+      match q.2.2, q.1.2 with
+      | none, some e => do
+        let v ← evalE env n { base with locals := cur ++ clo } e
+        pure (cur.map (fun p => if p.1 == q.1.1 then (p.1, v) else p))
+      | _, _ => pure cur) init
     let declared := ps.map Prod.fst
     let (bound, kwLeft) :=
       if usesCaller && !declared.contains "caller" then
@@ -598,7 +610,7 @@ def applyChain (env : Environment) : Nat → Frame → List FilterCall → Value
 template context, otherwise the locals; `ns.attr` writes the namespace. -/
 def assignTo (env : Environment) : Nat → Frame → Target → Value → RenderM Frame
   | 0, _, _, _ => throw .fuelExhausted
-  | _ + 1, fr, target, v => do
+  | n + 1, fr, target, v => do
     match target with
     | .nsAttr ns a =>
       match fr.lookup? ns with
@@ -606,11 +618,17 @@ def assignTo (env : Environment) : Nat → Frame → Target → Value → Render
         modify (fun h => heapSet h addr a v)
         pure fr
       | _ => throw (.runtime "cannot assign attribute on non-namespace object")
-    | _ => do
+    | .name x =>
+      if fr.top then pure { fr with ctx := (x, v) :: fr.ctx }
+      else pure { fr with locals := (x, v) :: fr.locals }
+    | .tuple ts => do
       let h ← get
-      let binds ← liftR (bindTarget env.undefined h target v)
-      if fr.top then pure { fr with ctx := binds ++ fr.ctx }
-      else pure { fr with locals := binds ++ fr.locals }
+      let xs ← liftR (iterOf env.undefined h v)
+      if xs.length < ts.length then
+        throw (.typeError s!"not enough values to unpack (expected {ts.length}, got {xs.length})")
+      else if xs.length > ts.length then
+        throw (.typeError s!"too many values to unpack (expected {ts.length})")
+      else (ts.zip xs).foldlM (fun (f : Frame) (p : Target × Value) => assignTo env n f p.1 p.2) fr
 
 /-- Render a `for` loop over its items (the filter applied first); the body
 sees the loop variables and `loop`. -/
@@ -632,10 +650,12 @@ def renderLoop (env : Environment) : Nat → Frame → LoopRec → Bool → List
       pure ps
     else
       let len := items.length
+      let cell := (← get).length
+      modify (· ++ [[]])
       (items.zipIdx).foldlM (fun (acc : List Piece) (p : Value × Nat) => do
         let (x, i) := p
         let loopV := Value.loop i len depth0 (if i = 0 then none else items[i - 1]?) items[i + 1]?
-          (if recursive then some rec else none)
+          (if recursive then some rec else none) cell
         let h ← get
         let binds ← liftR (bindTarget pol h rec.target x)
         let (ps, _) ← renderNodes env n { inner with locals := binds ++ ("loop", loopV) :: fr.locals }

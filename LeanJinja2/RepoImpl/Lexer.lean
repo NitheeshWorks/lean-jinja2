@@ -448,7 +448,8 @@ def stepTag (cfg : LexConfig) (k : TagKind) (stack : List Char) (afterDot : Bool
       emit (cut (.int v) n) (.tag k stack false) l
     | none =>
     let nl := nameLen l
-    if nl > 0 then
+    if nl > 0 && l.head? == some '\xb7' then .error ⟨"Invalid character in identifier", pos⟩
+    else if nl > 0 then
       emit (cut (.name (String.ofList (l.take nl))) nl) (.tag k stack false) l
     else
     match stringAt l with

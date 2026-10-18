@@ -175,7 +175,7 @@ def callMethod (fc : FCtx) (recv : Value) (name : String) (args : List Value)
       | none => .error (.typeError s!"{x.repr} is not in list")
     | "count", [x] => pure (.int (xs.countP (fun y => Value.pyEq y x)))
     | _, _ => typeErr s!"'{recv.typeName}' object has no attribute '{name}'"
-  | .loop i _ _ _ _ _ =>
+  | .loop i _ _ _ _ _ _ =>
     match name with
     | "cycle" =>
       if args.isEmpty then typeErr "no items for cycling given"

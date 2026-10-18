@@ -32,28 +32,34 @@ macro "ast_decr" : tactic =>
     | (have := sizeOf_fst_lt_of_mem ‹_›; simp_all; omega)
     | (have := sizeOf_snd_lt_of_mem ‹_›; simp_all; omega)))
 
-/-- Collect `f e'` over every subexpression `e'` of `e`, pre-order. -/
-def Expr.collect {α : Type} (f : Expr → List α) (e : Expr) : List α :=
+/-- Collect `f e'` over every subexpression `e'` of `e`, pre-order, not
+descending into subexpressions where `stop` holds. -/
+def Expr.collectS {α : Type} (stop : Expr → Bool) (f : Expr → List α) (e : Expr) : List α :=
+  if stop e then [] else
   f e ++ match e with
   | .const _ | .name _ => []
-  | .tuple xs | .list xs | .concat xs => xs.attach.flatMap (fun ⟨x, _⟩ => Expr.collect f x)
-  | .dict ps => ps.attach.flatMap (fun ⟨p, _⟩ => Expr.collect f p.1 ++ Expr.collect f p.2)
-  | .getattr x _ => Expr.collect f x
-  | .getitem x i => Expr.collect f x ++ Expr.collect f i
+  | .tuple xs | .list xs | .concat xs => xs.attach.flatMap (fun ⟨x, _⟩ => Expr.collectS stop f x)
+  | .dict ps => ps.attach.flatMap (fun ⟨p, _⟩ => Expr.collectS stop f p.1 ++ Expr.collectS stop f p.2)
+  | .getattr x _ => Expr.collectS stop f x
+  | .getitem x i => Expr.collectS stop f x ++ Expr.collectS stop f i
   | .slice a b c =>
-    (match a with | some x => Expr.collect f x | none => []) ++
-    (match b with | some x => Expr.collect f x | none => []) ++
-    (match c with | some x => Expr.collect f x | none => [])
+    (match a with | some x => Expr.collectS stop f x | none => []) ++
+    (match b with | some x => Expr.collectS stop f x | none => []) ++
+    (match c with | some x => Expr.collectS stop f x | none => [])
   | .call g args kw | .filter g _ args kw | .test g _ args kw =>
-    Expr.collect f g ++ args.attach.flatMap (fun ⟨x, _⟩ => Expr.collect f x) ++
-      kw.attach.flatMap (fun ⟨p, _⟩ => Expr.collect f p.2)
-  | .unop _ x => Expr.collect f x
-  | .binop _ l r => Expr.collect f l ++ Expr.collect f r
-  | .compare x ops => Expr.collect f x ++ ops.attach.flatMap (fun ⟨p, _⟩ => Expr.collect f p.2)
-  | .cond a b c => Expr.collect f a ++ Expr.collect f b ++
-    (match c with | some x => Expr.collect f x | none => [])
+    Expr.collectS stop f g ++ args.attach.flatMap (fun ⟨x, _⟩ => Expr.collectS stop f x) ++
+      kw.attach.flatMap (fun ⟨p, _⟩ => Expr.collectS stop f p.2)
+  | .unop _ x => Expr.collectS stop f x
+  | .binop _ l r => Expr.collectS stop f l ++ Expr.collectS stop f r
+  | .compare x ops => Expr.collectS stop f x ++ ops.attach.flatMap (fun ⟨p, _⟩ => Expr.collectS stop f p.2)
+  | .cond a b c => Expr.collectS stop f a ++ Expr.collectS stop f b ++
+    (match c with | some x => Expr.collectS stop f x | none => [])
 termination_by sizeOf e
 decreasing_by all_goals ast_decr
+
+/-- Collect over every subexpression. -/
+def Expr.collect {α : Type} (f : Expr → List α) (e : Expr) : List α :=
+  Expr.collectS (fun _ => false) f e
 
 /-- The expressions of a filter chain. -/
 def FilterCall.exprs (fc : FilterCall) : List Expr := fc.args ++ fc.kwargs.map Prod.snd
@@ -63,40 +69,46 @@ def paramExprs (ps : List Param) : List Expr := ps.filterMap Prod.snd
 
 /-- Collect over every node (pre-order), with `g` applied to each node and
 `f` to every expression in it. -/
-def Node.collect {α : Type} (f : Expr → List α) (g : Node → List α) (n : Node) : List α :=
-  let ex := fun (e : Expr) => Expr.collect f e
+def Node.collectS {α : Type} (stopE : Expr → Bool) (stopN : Node → Bool) (f : Expr → List α)
+    (g : Node → List α) (n : Node) : List α :=
+  let ex := fun (e : Expr) => Expr.collectS stopE f e
+  if stopN n then [] else
   g n ++ match n with
   | .text _ => []
   | .output e => ex e
   | .if_ branches els =>
     branches.attach.flatMap (fun ⟨b, hb⟩ =>
       have : sizeOf b.2 < sizeOf branches := sizeOf_snd_lt_of_mem hb
-      ex b.1 ++ b.2.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)) ++
-    els.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+      ex b.1 ++ b.2.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)) ++
+    els.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .for_ _ iter filt _ body els =>
     ex iter ++ (match filt with | some e => ex e | none => []) ++
-    body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x) ++
-    els.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+    body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x) ++
+    els.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .set _ e => ex e
   | .setBlock _ fs body =>
-    fs.flatMap (fun fc => fc.exprs.flatMap ex) ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+    fs.flatMap (fun fc => fc.exprs.flatMap ex) ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .macro _ ps body =>
-    (paramExprs ps).flatMap ex ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+    (paramExprs ps).flatMap ex ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .callBlock ps c body =>
-    (paramExprs ps).flatMap ex ++ ex c ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+    (paramExprs ps).flatMap ex ++ ex c ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .include e _ _ => ex e
   | .extends e => ex e
-  | .block _ _ _ body => body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+  | .block _ _ _ body => body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .with_ assigns body =>
-    assigns.flatMap (fun a => ex a.2) ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+    assigns.flatMap (fun a => ex a.2) ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
   | .filterBlock fs body =>
-    fs.flatMap (fun fc => fc.exprs.flatMap ex) ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
-  | .autoescape e body => ex e ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collect f g x)
+    fs.flatMap (fun fc => fc.exprs.flatMap ex) ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
+  | .autoescape e body => ex e ++ body.attach.flatMap (fun ⟨x, _⟩ => Node.collectS stopE stopN f g x)
 termination_by sizeOf n
 decreasing_by all_goals (simp_wf; first
   | omega
   | (have := List.sizeOf_lt_of_mem ‹_›; omega)
   | (have := List.sizeOf_lt_of_mem ‹_ ∈ _›; omega))
+
+/-- Collect over every node. -/
+def Node.collect {α : Type} (f : Expr → List α) (g : Node → List α) (n : Node) : List α :=
+  Node.collectS (fun _ => false) (fun _ => false) f g n
 
 /-- Collect over a node list. -/
 def nodesCollect {α : Type} (f : Expr → List α) (g : Node → List α) (ns : List Node) : List α :=
@@ -114,6 +126,34 @@ def filterNames (ns : List Node) : List String :=
     (fun nd => match nd with
       | .setBlock _ fs _ | .filterBlock fs _ => fs.map FilterCall.name
       | _ => []) ns
+
+/-- The filter and test names a template uses outside `if` statements and
+conditional expressions, where upstream checks them when compiling (inside,
+an unknown name fails only if reached): `(isFilter, name)`. -/
+def hardFilterTestNames (ns : List Node) : List (Bool × String) :=
+  ns.flatMap (Node.collectS (fun e => match e with | .cond .. => true | _ => false)
+    (fun nd => match nd with | .if_ .. => true | _ => false)
+    (fun e => match e with
+      | .filter _ nm _ _ => [(true, nm)]
+      | .test _ nm _ _ => [(false, nm)]
+      | _ => [])
+    (fun nd => match nd with
+      | .setBlock _ fs _ | .filterBlock fs _ => fs.map (fun f => (true, f.name))
+      | _ => []))
+
+/-- The names `for` loops bind, anywhere in a template. -/
+def forTargets (ns : List Node) : List Target :=
+  nodesCollect (fun _ => []) (fun nd => match nd with
+    | .for_ t .. => [t]
+    | _ => []) ns
+
+/-- The names a target binds. -/
+def Target.names : Target → List String
+  | .name n => [n]
+  | .nsAttr _ _ => []
+  | .tuple ts => ts.attach.flatMap (fun ⟨t, _⟩ => t.names)
+termination_by t => sizeOf t
+decreasing_by simp_wf; have := List.sizeOf_lt_of_mem ‹_›; omega
 
 /-- The blocks a template defines, at any depth: name, scoped, required,
 body. -/

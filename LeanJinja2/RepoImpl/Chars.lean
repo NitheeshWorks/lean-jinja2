@@ -18,10 +18,18 @@ def isSpace (c : Char) : Bool :=
 /-- A line break character (`\n` or `\r`). -/
 def isNewline (c : Char) : Bool := c == '\n' || c == '\r'
 
-/-- A character of an identifier (`\w`): ASCII letters, digits, `_`, and any
-non-ASCII character that is not whitespace. -/
+/-- Non-ASCII ranges that are punctuation, symbols or emoji rather than
+letters (an approximation of Unicode's categories; Lean has no tables). -/
+def isSymbolRange (v : UInt32) : Bool :=
+  (v ≥ 0x80 && v ≤ 0xbf && v != 0xaa && v != 0xb5 && v != 0xba && v != 0xb7) ||
+  v == 0xd7 || v == 0xf7 || (v ≥ 0x2000 && v ≤ 0x206f) || (v ≥ 0x20a0 && v ≤ 0x20cf) ||
+  (v ≥ 0x2190 && v ≤ 0x2bff) || (v ≥ 0x3000 && v ≤ 0x303f) || (v ≥ 0xe000 && v ≤ 0xf8ff) ||
+  (v ≥ 0xfe00 && v ≤ 0xfe0f) || (v ≥ 0x1f000 && v ≤ 0x1faff)
+
+/-- A character of an identifier (`\w` plus upstream's extra identifier
+characters): ASCII letters, digits, `_`, and non-ASCII letters. -/
 def isIdentChar (c : Char) : Bool :=
-  c.isAlphanum || c == '_' || (c.val ≥ 128 && !isSpace c)
+  c.isAlphanum || c == '_' || (c.val ≥ 128 && !isSpace c && !isSymbolRange c.val)
 
 def isDigit (c : Char) : Bool := c.isDigit
 

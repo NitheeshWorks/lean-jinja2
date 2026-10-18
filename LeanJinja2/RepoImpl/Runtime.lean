@@ -97,7 +97,7 @@ def indexList (xs : List Value) (i : Int) : Option Value :=
 
 /-- Loop attributes (upstream `LoopContext`). -/
 def loopAttr (index0 length depth0 : Nat) (prev next : Option Value) (recur : Option LoopRec)
-    (a : String) : Option Value :=
+    (cell : Nat) (a : String) : Option Value :=
   match a with
   | "index" => some (.int (index0 + 1))
   | "index0" => some (.int index0)
@@ -110,8 +110,8 @@ def loopAttr (index0 length depth0 : Nat) (prev next : Option Value) (recur : Op
   | "depth0" => some (.int depth0)
   | "previtem" => some (prev.getD (.undef (.hint "there is no previous item")))
   | "nextitem" => some (next.getD (.undef (.hint "there is no next item")))
-  | "cycle" => some (.method (.loop index0 length depth0 prev next recur) "cycle")
-  | "changed" => some (.method (.loop index0 length depth0 prev next recur) "changed")
+  | "cycle" => some (.method (.loop index0 length depth0 prev next recur cell) "cycle")
+  | "changed" => some (.method (.loop index0 length depth0 prev next recur cell) "changed")
   | _ => none
 
 /-- Python attribute lookup only (no item fallback); `none` if missing. -/
@@ -121,7 +121,7 @@ def pyAttr (heap : Heap) (v : Value) (a : String) : Option Value :=
   | .str _ | .markup _ => if strMethods.contains a then some (.method v a) else none
   | .list _ => if listMethods.contains a then some (.method v a) else none
   | .tuple _ => if a == "index" || a == "count" then some (.method v a) else none
-  | .loop i len d p nx r => loopAttr i len d p nx r a
+  | .loop i len d p nx r c => loopAttr i len d p nx r c a
   | .ns addr => ((heap[addr]?).getD []).lookup a
   | .macro n .. => if a == "name" then some (.str n) else none
   | _ => none
